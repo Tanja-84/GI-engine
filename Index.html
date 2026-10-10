@@ -112,6 +112,10 @@ button:hover { border-color: var(--accent); color: var(--accent); }
         <input id="rows" data-k="rows" type="range" min="96" max="360" step="8" value="232"></div>
       <div class="row"><label for="levels">Уровней цвета</label><output id="o_levels"></output>
         <input id="levels" data-k="levels" type="range" min="6" max="64" step="1" value="40"></div>
+      <label class="sw"><span>Полный кадр сразу</span><input id="full" data-k="full" type="checkbox" checked></label>
+      <div class="row"><label for="target">Сэмплов на кадр</label><output id="o_target"></output>
+        <input id="target" data-k="target" type="range" min="8" max="256" step="8" value="64"></div>
+      <p class="note">Движение без шума: при каждом сдвиге кадр досчитывается целиком, а потом показывается. Если картинка начала подтормаживать, уменьшите число сэмплов.</p>
       <label class="sw"><span>Грани на кувшинах</span><input id="facets" data-k="facets" type="checkbox" checked></label>
       <label class="sw"><span>Сглаживание краёв</span><input id="aa" data-k="aa" type="checkbox"></label>
     </fieldset>
@@ -551,7 +555,7 @@ void main() {
   gl.bindVertexArray(gl.createVertexArray());
 
   // ---------- состояние ----------
-  var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false };
+  var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false, full: true, target: 64 };
   var cam = { yaw: 0, pitch: 0, k: 1 };
   var W = 0, H = 0, tex = [], fbo = [], cur = 0, count = 0, needReset = true, frameNo = 1, spp = 2;
   var outW = 0, outH = 0, interacting = 0;
@@ -600,7 +604,7 @@ void main() {
   }
 
   // ---------- рендер ----------
-  function renderPT() {
+  function renderPT(n) {
     var dst = 1 - cur, b = cameraBasis();
     var az = S.sunAz * Math.PI / 180, el = S.sunEl * Math.PI / 180;
     var sd = [Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)];
@@ -611,7 +615,7 @@ void main() {
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex[cur]);
     gl.uniform1i(u.uPrev, 0);
     gl.uniform2f(u.uRes, W, H);
-    gl.uniform1i(u.uSpp, interacting > 0 ? 1 : spp);
+    gl.uniform1i(u.uSpp, n);
     gl.uniform1ui(u.uSeed, (frameNo++ * 2654435761) >>> 0);
     gl.uniform1f(u.uReset, needReset ? 1 : 0);
     gl.uniform3fv(u.uCamPos, b.pos); gl.uniform3fv(u.uCamF, b.f); gl.uniform3fv(u.uCamR, b.r); gl.uniform3fv(u.uCamU, b.u);
@@ -621,10 +625,8 @@ void main() {
     gl.uniform1i(u.uBounces, S.bounces);
     gl.uniform1i(u.uDebug, window.__debug ? 1 : 0); gl.uniform1f(u.uFacet, S.facets ? 1 : 0); gl.uniform1f(u.uAA, S.aa ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    var used = interacting > 0 ? 1 : spp;
-    count = needReset ? used : count + used;
+    count = needReset ? n : count + n;
     needReset = false; cur = dst;
-    if (interacting > 0) interacting--;
   }
   function display() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -659,7 +661,7 @@ void main() {
     sunI: function (v) { return Number(v).toFixed(1); }, skyI: function (v) { return Number(v).toFixed(1); },
     sunAz: function (v) { return v + '°'; }, sunEl: function (v) { return v + '°'; },
     exposure: function (v) { return '×' + Number(v).toFixed(2); },
-    rows: function (v) { return v + ' строк'; }, levels: function (v) { return String(v); }
+    rows: function (v) { return v + ' строк'; }, levels: function (v) { return String(v); }, target: function (v) { return String(v); }
   };
   Array.prototype.forEach.call(document.querySelectorAll('[data-k]'), function (el) {
     var k = el.getAttribute('data-k');
@@ -669,7 +671,7 @@ void main() {
       var rowsChanged = k === 'rows' && v !== S.rows;
       S[k] = v;
       if (out) out.textContent = fmt[k](v);
-      if (k === 'levels' || k === 'exposure') return;
+      if (k === 'levels' || k === 'exposure' || k === 'full' || k === 'target') return;
       if (rowsChanged) allocTargets(); else needReset = true;
     }
     el.addEventListener('input', apply);
@@ -704,9 +706,12 @@ void main() {
     var dt = now - last; last = now;
     if (dt > 0 && dt < 1000) fpsAvg = fpsAvg * 0.9 + (1000 / dt) * 0.1;
     if (window.__pause) return;
-    if (needReset || count < maxSamples) {
-      renderPT();
-      tick++;
+    tick++;
+    if (S.full && (needReset || count < S.target)) {
+      do { renderPT(4); } while (count < S.target);
+    } else if (needReset || count < maxSamples) {
+      renderPT(interacting > 0 ? 1 : spp);
+      if (interacting > 0) interacting--;
       if (tick % 8 === 0 && !window.__fixedSpp) {
         if (dt > 48 && spp > 1) spp--;
         else if (dt < 20 && spp < 6) spp++;
