@@ -79,7 +79,7 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   <section class="stage" id="stage" aria-label="Окно рендера">
     <div class="frame" id="frame">
       <canvas id="view" width="100" height="160" aria-label="Сцена с глиняными кувшинами, посчитанная трассировкой путей"></canvas>
-      <div class="hud" id="hud"><span>сэмплов <b id="hSpp">0</b></span><span id="hRes">—</span><span><b id="hFps">0</b> кадр/с</span></div>
+      <div class="hud" id="hud"><span>сэмплов <b id="hSpp">0</b></span><span id="hRes">—</span><span id="hFpsWrap"><b id="hFps">—</b> <span id="hFpsL">полн. пересчёт</span></span></div>
     </div>
     <div class="err" id="err" hidden></div>
   </section>
@@ -126,6 +126,12 @@ button:hover { border-color: var(--accent); color: var(--accent); }
       <div class="row"><label for="dnPhi">Сила</label><output id="o_dnPhi"></output>
         <input id="dnPhi" data-k="dnPhi" type="range" min="0.5" max="8" step="0.5" value="3"></div>
       <p class="note">Фильтр смотрит на нормали, глубину и яркость, поэтому края предметов и границы теней остаются резкими, а текстура кирпича и дерева не размывается. С ростом числа сэмплов он слабеет сам.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Скорость</legend>
+      <label class="sw"><span>FPS только по полному пересчёту</span><input id="fpsFull" data-k="fpsFull" type="checkbox" checked></label>
+      <p class="note">Счётчик в углу кадра считает только кадры, где свет пересчитывается целиком, то есть в режиме «Полный кадр сразу». Время берётся до момента, когда видеокарта реально закончила работу. Пока камера стоит, показано последнее значение. Выключите, чтобы видеть обычную частоту кадров.</p>
     </fieldset>
 
     <fieldset>
@@ -622,8 +628,9 @@ void main() {
   gl.bindVertexArray(gl.createVertexArray());
 
   // ---------- состояние ----------
-  var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false, full: true, target: 64, dn: true, dnPhi: 3 };
+  var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false, full: true, target: 64, dn: true, dnPhi: 3, fpsFull: true };
   var cam = { yaw: 0, pitch: 0, k: 1 };
+  var msAvg = 0, lastRec = 0;
   var W = 0, H = 0, tex = [], fbo = [], cur = 0, count = 0, needReset = true, frameNo = 1, spp = 2;
   var outW = 0, outH = 0, interacting = 0;
 
@@ -777,8 +784,9 @@ void main() {
       var v = el.type === 'checkbox' ? el.checked : parseFloat(el.value);
       var rowsChanged = k === 'rows' && v !== S.rows;
       S[k] = v;
+      if (k === 'fpsFull') { msAvg = 0; lastRec = 0; recent = []; }
       if (out) out.textContent = fmt[k](v);
-      if (k === 'levels' || k === 'exposure' || k === 'full' || k === 'target' || k === 'dn' || k === 'dnPhi') return;
+      if (k === 'levels' || k === 'exposure' || k === 'full' || k === 'target' || k === 'dn' || k === 'dnPhi' || k === 'fpsFull') return;
       if (rowsChanged) allocTargets(); else needReset = true;
     }
     el.addEventListener('input', apply);
@@ -806,15 +814,51 @@ void main() {
   }, { passive: false });
 
   // ---------- цикл ----------
-  var last = performance.now(), fpsAvg = 30, tick = 0, hSpp = document.getElementById('hSpp'), hFps = document.getElementById('hFps');
-  window.__gi = { get count() { return count; }, S: S, setSpp: function (n) { spp = n; }, snap: function () { display(); return canvas.toDataURL('image/png'); } };
+  var last = performance.now(), fpsAvg = 30, tick = 0, hSpp = document.getElementById('hSpp'), hFps = document.getElementById('hFps'), hFpsL = document.getElementById('hFpsL'), hFpsWrap = document.getElementById('hFpsWrap');
+  var burstQ = [], polling = false, lastDone = 0, mc = new MessageChannel();
+  var recCount = 0, trackedN = 0;
+  var recent = [], warm = false;
+  function record(d) {
+    recCount++;
+    if (!warm) { warm = true; return; }
+    if (d < 0.05) return;
+    recent.push(d);
+    if (recent.length > 7) recent.shift();
+    var srt = recent.slice().sort(function (a, b) { return a - b; });
+    msAvg = srt[srt.length >> 1];
+    lastRec = performance.now();
+  }
+  function poll() {
+    var now = performance.now();
+    while (burstQ.length) {
+      var b = burstQ[0], r = gl.clientWaitSync(b.sync, 0, 0);
+      if (r === gl.TIMEOUT_EXPIRED) break;
+      gl.deleteSync(b.sync); burstQ.shift();
+      record(now - Math.max(b.t0, lastDone));
+      lastDone = now;
+    }
+    if (burstQ.length) mc.port2.postMessage(0); else polling = false;
+  }
+  mc.port1.onmessage = poll;
+  function trackBurst(t0) {
+    trackedN++;
+    var sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    gl.flush();
+    burstQ.push({ sync: sync, t0: t0 });
+    if (burstQ.length > 8) { gl.deleteSync(burstQ.shift().sync); }
+    if (!polling) { polling = true; mc.port2.postMessage(0); }
+  }
+  function fmtFps(v) { return v < 10 ? v.toFixed(1) : String(Math.round(v)); }
+  window.__gi = { get count() { return count; }, get ms() { return msAvg; }, get q() { return burstQ.length; }, get recs() { return recCount; }, get tracked() { return trackedN; }, S: S, setSpp: function (n) { spp = n; }, snap: function () { display(); return canvas.toDataURL('image/png'); } };
   function loop(now) {
     requestAnimationFrame(loop);
     var dt = now - last; last = now;
     if (dt > 0 && dt < 1000) fpsAvg = fpsAvg * 0.9 + (1000 / dt) * 0.1;
     if (window.__pause) return;
     tick++;
+    var burst = false, tb = 0;
     if (S.full && (needReset || count < S.target)) {
+      burst = true; tb = performance.now();
       do { renderPT(4); } while (count < S.target);
     } else if (needReset || count < maxSamples) {
       renderPT(interacting > 0 ? 1 : spp);
@@ -825,7 +869,20 @@ void main() {
       }
     }
     display();
-    if (tick % 6 === 0) { hSpp.textContent = count; hFps.textContent = Math.round(fpsAvg); }
+    if (burst && S.fpsFull) trackBurst(tb);
+    if (tick % 6 === 0) {
+      hSpp.textContent = count;
+      if (S.fpsFull) {
+        if (!S.full) { hFps.textContent = '—'; hFpsL.textContent = 'включите «Полный кадр сразу»'; hFpsWrap.style.opacity = '1'; }
+        else if (msAvg > 0) {
+          hFps.textContent = fmtFps(1000 / msAvg);
+          hFpsL.textContent = 'полн. пересчёт · ' + msAvg.toFixed(1) + ' мс';
+          hFpsWrap.style.opacity = (performance.now() - lastRec > 1500) ? '0.65' : '1';
+        } else { hFps.textContent = '—'; hFpsL.textContent = 'полн. пересчёт'; hFpsWrap.style.opacity = '1'; }
+      } else {
+        hFps.textContent = Math.round(fpsAvg); hFpsL.textContent = 'кадр/с'; hFpsWrap.style.opacity = '1';
+      }
+    }
   }
   fit(); allocTargets(); fit();
   requestAnimationFrame(loop);
