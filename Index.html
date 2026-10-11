@@ -131,6 +131,9 @@ button:hover { border-color: var(--accent); color: var(--accent); }
     <fieldset>
       <legend>Скорость</legend>
       <label class="sw"><span>FPS только по полному пересчёту</span><input id="fpsFull" data-k="fpsFull" type="checkbox" checked></label>
+      <label class="sw"><span>Снять лимит 60 кадр/с</span><input id="unlock" data-k="unlock" type="checkbox" checked></label>
+      <label class="sw"><span>Качать камеру сама (для замера)</span><input id="sway" data-k="sway" type="checkbox"></label>
+      <p class="note">Без лимита следующий кадр запускается сразу, как видеокарта закончила предыдущий, а не раз за обновление монитора. Браузер при этом всё равно показывает картинку с частотой монитора: это из страницы не отключить. Реальную скорость расчёта показывает счётчик. Автопокачивание заставляет каждый кадр считаться заново, так что замер идёт без вашей руки.</p>
       <p class="note">Счётчик в углу кадра считает только кадры, где свет пересчитывается целиком, то есть в режиме «Полный кадр сразу». Время берётся до момента, когда видеокарта реально закончила работу. Пока камера стоит, показано последнее значение. Выключите, чтобы видеть обычную частоту кадров.</p>
     </fieldset>
 
@@ -714,7 +717,7 @@ void main() {
   gl.uniform1fv(pt.u['VRT[0]'], new Float32Array(VRTd));
 
   // ---------- состояние ----------
-  var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false, full: true, target: 64, dn: true, dnPhi: 3, fpsFull: true };
+  var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false, full: true, target: 64, dn: true, dnPhi: 3, fpsFull: true, unlock: true, sway: false };
   var cam = { yaw: 0, pitch: 0, k: 1 };
   var msAvg = 0, lastRec = 0;
   var W = 0, H = 0, tex = [], fbo = [], cur = 0, count = 0, needReset = true, frameNo = 1, spp = 2;
@@ -872,7 +875,7 @@ void main() {
       S[k] = v;
       if (k === 'fpsFull') { msAvg = 0; lastRec = 0; recent = []; }
       if (out) out.textContent = fmt[k](v);
-      if (k === 'levels' || k === 'exposure' || k === 'full' || k === 'target' || k === 'dn' || k === 'dnPhi' || k === 'fpsFull') return;
+      if (k === 'levels' || k === 'exposure' || k === 'full' || k === 'target' || k === 'dn' || k === 'dnPhi' || k === 'fpsFull' || k === 'unlock' || k === 'sway') return;
       if (rowsChanged) allocTargets(); else needReset = true;
     }
     el.addEventListener('input', apply);
@@ -920,33 +923,39 @@ void main() {
       var b = burstQ[0], r = gl.clientWaitSync(b.sync, 0, 0);
       if (r === gl.TIMEOUT_EXPIRED) break;
       gl.deleteSync(b.sync); burstQ.shift();
-      record(now - Math.max(b.t0, lastDone));
+      if (b.fps) record(now - Math.max(b.t0, lastDone));
       lastDone = now;
     }
     if (burstQ.length) mc.port2.postMessage(0); else polling = false;
   }
   mc.port1.onmessage = poll;
-  function trackBurst(t0) {
+  function trackBurst(t0, isFps) {
     trackedN++;
     var sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
     gl.flush();
-    burstQ.push({ sync: sync, t0: t0 });
+    burstQ.push({ sync: sync, t0: t0, fps: isFps });
     if (burstQ.length > 8) { gl.deleteSync(burstQ.shift().sync); }
     if (!polling) { polling = true; mc.port2.postMessage(0); }
   }
   function fmtFps(v) { return v < 10 ? v.toFixed(1) : String(Math.round(v)); }
-  window.__gi = { get count() { return count; }, get ms() { return msAvg; }, get q() { return burstQ.length; }, get recs() { return recCount; }, get tracked() { return trackedN; }, S: S, setSpp: function (n) { spp = n; }, snap: function () { display(); return canvas.toDataURL('image/png'); } };
+  window.__gi = { get count() { return count; }, get ms() { return msAvg; }, get q() { return burstQ.length; }, get recs() { return recCount; }, get tracked() { return trackedN; }, get tick() { return tick; }, S: S, setSpp: function (n) { spp = n; }, snap: function () { display(); return canvas.toDataURL('image/png'); } };
+  var mcLoop = new MessageChannel();
+  mcLoop.port1.onmessage = function () { loop(performance.now()); };
+  function waitGpu() { setTimeout(function () { loop(performance.now()); }, 0); }
   function loop(now) {
-    requestAnimationFrame(loop);
+    if (window.__pause) { requestAnimationFrame(loop); return; }
+    // без лимита: не копим очередь, ждём, пока видеокарта закончит один из двух последних кадров
+    if (S.unlock && burstQ.length >= 2) { waitGpu(); return; }
     var dt = now - last; last = now;
     if (dt > 0 && dt < 1000) fpsAvg = fpsAvg * 0.9 + (1000 / dt) * 0.1;
-    if (window.__pause) return;
     tick++;
-    var burst = false, tb = 0;
+    if (S.sway) { cam.yaw = 0.3 * Math.sin(now / 650); cam.pitch = 0.08 * Math.sin(now / 910); needReset = true; }
+    var work = false, burst = false, tb = performance.now();
     if (S.full && (needReset || count < S.target)) {
-      burst = true; tb = performance.now();
+      work = burst = true;
       do { renderPT(4); } while (count < S.target);
     } else if (needReset || count < maxSamples) {
+      work = true;
       renderPT(interacting > 0 ? 1 : spp);
       if (interacting > 0) interacting--;
       if (tick % 8 === 0 && !window.__fixedSpp) {
@@ -955,7 +964,7 @@ void main() {
       }
     }
     display();
-    if (burst && S.fpsFull) trackBurst(tb);
+    if (work && (S.unlock || (burst && S.fpsFull))) trackBurst(tb, burst && S.fpsFull);
     if (tick % 6 === 0) {
       hSpp.textContent = count;
       if (S.fpsFull) {
@@ -969,6 +978,7 @@ void main() {
         hFps.textContent = Math.round(fpsAvg); hFpsL.textContent = 'кадр/с'; hFpsWrap.style.opacity = '1';
       }
     }
+    if (S.unlock && work) mcLoop.port2.postMessage(0); else requestAnimationFrame(loop);
   }
   fit(); allocTargets(); fit();
   requestAnimationFrame(loop);
