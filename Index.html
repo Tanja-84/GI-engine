@@ -193,7 +193,7 @@ float rnd() { s0 = pcg(s0); return float(s0) * (1.0 / 4294967296.0); }
 float h21(vec2 p) { uvec2 q = uvec2(ivec2(floor(p)) + 32768); return float(pcg(q.x + pcg(q.y))) * (1.0 / 4294967296.0); }
 float h31(vec3 p) { uvec3 q = uvec3(ivec3(floor(p)) + 32768); return float(pcg(q.x + pcg(q.y + pcg(q.z)))) * (1.0 / 4294967296.0); }
 
-// ---------- кувшины: тела вращения ----------
+// ---------- кувшины: тела вращения (кольца-конусы, считаются аналитически) ----------
 const int NV = 7;
 const vec3 VP[NV] = vec3[NV](
   vec3( 0.31, 0.61, -1.93),   // высокая амфора
@@ -203,38 +203,7 @@ const vec3 VP[NV] = vec3[NV](
   vec3(-0.03, 0.61, -1.90),   // средний за ним
   vec3(-0.36, 0.61, -1.72),   // большой на стеллаже
   vec3(-0.34, 1.44, -1.58));  // малый на верхней полке
-const vec4 VA[NV] = vec4[NV]( // высота, r основания, r брюха, r горла
-  vec4(0.62, 0.075, 0.155, 0.085),
-  vec4(0.44, 0.085, 0.147, 0.083),
-  vec4(0.56, 0.170, 0.270, 0.160),
-  vec4(0.20, 0.100, 0.160, 0.115),
-  vec4(0.40, 0.080, 0.125, 0.070),
-  vec4(0.72, 0.170, 0.220, 0.120),
-  vec4(0.26, 0.080, 0.135, 0.085));
-const vec3 VB[NV] = vec3[NV]( // r венчика, t брюха, t горла
-  vec3(0.115, 0.58, 0.88), vec3(0.093, 0.42, 0.82), vec3(0.170, 0.50, 0.90), vec3(0.120, 0.40, 0.85),
-  vec3(0.085, 0.38, 0.82), vec3(0.150, 0.50, 0.92), vec3(0.095, 0.45, 0.88));
-
-float vR(int i, float y) {
-  vec4 a = VA[i]; vec3 b = VB[i];
-  float t = clamp(y / a.x, 0.0, 1.0);
-  if (t < b.y) { float u = t / b.y; return mix(a.y, a.z, sin(u * 1.5708)); }
-  if (t < b.z) { float v = (t - b.y) / (b.z - b.y); return mix(a.z, a.w, smoothstep(0.0, 1.0, v)); }
-  float w = (t - b.z) / (1.0 - b.z);
-  return mix(a.w, b.x, w * w);
-}
-
-float sdVase(vec3 p, int i) {
-  vec3 q = p - VP[i]; vec4 a = VA[i]; vec3 b = VB[i];
-  float rr = length(q.xz);
-  float rmax = max(max(a.z, b.x), a.y);
-  float cap = abs(q.y - a.x * 0.5) - a.x * 0.5;
-  float dB = max(rr - rmax, cap);
-  if (dB > 0.12) return dB;
-  float d = max((rr - vR(i, q.y)) * 0.8, cap);
-  float carve = max(rr - b.x * 0.7, (a.x - 0.03) - q.y);
-  return max(d, -carve);
-}
+/*VASEDATA*/
 
 // ---------- дерево ----------
 const int NB = 16;
@@ -250,30 +219,6 @@ const vec3 WH[NB] = vec3[NB](
   vec3(0.065, 0.285, 0.060), vec3(0.040, 0.285, 0.040), vec3(0.040, 0.285, 0.040), vec3(0.040, 0.285, 0.040));
 const float WID[NB] = float[NB](2.0, 3.0, 3.0, 3.0, 3.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0);
 
-float sdBox(vec3 p, vec3 c, vec3 h) { vec3 q = abs(p - c) - h; return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0); }
-
-// ---------- ткань ----------
-float sdCloth(vec3 p) {
-  float zf = -2.072 + 0.012 * sin(p.x * 26.0 + p.y * 3.0);
-  float yb = 1.30 + 0.05 * h21(vec2(floor(p.x / 0.022), 4.0)) + 0.02 * sin(p.x * 14.0);
-  float dz = abs(p.z - zf) - 0.008;
-  float dx = max(0.44 - p.x, p.x - 1.5);
-  return max(max(dz, dx), yb - p.y) * 0.7;
-}
-
-float map(vec3 p, out float id) {
-  float d = 1e5; id = 0.0;
-  for (int i = 0; i < NV; i++) { float v = sdVase(p, i); if (v < d) { d = v; id = 10.0 + float(i); } }
-  for (int i = 0; i < NB; i++) { float v = sdBox(p, WC[i], WH[i]); if (v < d) { d = v; id = WID[i]; } }
-  float c = sdCloth(p); if (c < d) { d = c; id = 5.0; }
-  return d;
-}
-
-vec3 calcN(vec3 p) {
-  float id; vec2 e = vec2(0.0015, -0.0015);
-  return normalize(e.xyy * map(p + e.xyy, id) + e.yyx * map(p + e.yyx, id) + e.yxy * map(p + e.yxy, id) + e.xxx * map(p + e.xxx, id));
-}
-
 vec3 safeInv(vec3 d) { return 1.0 / (d + vec3(1e-7) * (step(0.0, d) * 2.0 - 1.0)); }
 
 vec2 aabb(vec3 ro, vec3 rd) {
@@ -281,6 +226,145 @@ vec2 aabb(vec3 ro, vec3 rd) {
   vec3 t0 = (BMIN - ro) * inv, t1 = (BMAX - ro) * inv;
   vec3 tmin = min(t0, t1), tmax = max(t0, t1);
   return vec2(max(max(tmin.x, tmin.y), tmin.z), min(min(tmax.x, tmax.y), tmax.z));
+}
+
+// ---------- точные пересечения ----------
+const float TMIN = 0.0004;
+
+float hitCloth(vec3 ro, vec3 rd, float tmax, out vec3 n) {
+  n = vec3(0.0, 0.0, 1.0);
+  if (abs(rd.z) < 1e-5) return -1.0;
+  float t = (-2.072 - ro.z) / rd.z;
+  for (int k = 0; k < 3; k++) {
+    vec3 p = ro + rd * t;
+    t = (-2.072 + 0.012 * sin(p.x * 26.0 + p.y * 3.0) - ro.z) / rd.z;
+  }
+  if (t < TMIN || t > tmax) return -1.0;
+  vec3 p = ro + rd * t;
+  if (p.x < 0.44 || p.x > 1.5) return -1.0;
+  float yb = 1.30 + 0.05 * h21(vec2(floor(p.x / 0.022), 4.0)) + 0.02 * sin(p.x * 14.0);
+  if (p.y < yb) return -1.0;
+  float cs = cos(p.x * 26.0 + p.y * 3.0);
+  n = normalize(vec3(-0.312 * cs, -0.036 * cs, 1.0));
+  return t;
+}
+
+float hitVase(int i, vec3 ro, vec3 rd, vec3 inv, float tmax, out vec3 n) {
+  n = vec3(0.0, 1.0, 0.0);
+  vec3 q = ro - VP[i];
+  vec4 a = VA[i];
+  vec3 bv = VB[i];
+  float H = a.x, hr = H / 14.0, rim = bv.x, rin = rim * 0.7;
+  float rmax = max(max(a.z, rim), a.y) + 0.003;
+  vec3 bc = vec3(0.0, H * 0.5, 0.0), bh = vec3(rmax, H * 0.5 + 0.002, rmax);
+  vec3 tA = (bc - bh - q) * inv, tB = (bc + bh - q) * inv;
+  vec3 tn = min(tA, tB), tf = max(tA, tB);
+  float tN = max(max(tn.x, tn.y), tn.z), tF = min(min(tf.x, tf.y), tf.z);
+  if (tN > tF || tF < TMIN || tN > tmax) return -1.0;
+  float best = min(tmax, tF + 0.001);
+  bool hit = false;
+  int base = i * 15;
+  float ya = q.y + rd.y * max(tN, 0.0), yb = q.y + rd.y * min(tF, best);
+  int jlo = int(clamp(floor((min(ya, yb) - 1e-4) / hr), 0.0, 13.0));
+  int jhi = int(clamp(floor((max(ya, yb) + 1e-4) / hr), 0.0, 13.0));
+  for (int j = jlo; j <= jhi; j++) {
+    float r0 = VRT[base + j], r1 = VRT[base + j + 1];
+    float y0 = float(j) * hr;
+    float k = (r1 - r0) / hr;
+    float cy = r0 + k * (q.y - y0);
+    float qa = dot(rd.xz, rd.xz) - k * k * rd.y * rd.y;
+    float qb = dot(q.xz, rd.xz) - k * rd.y * cy;
+    float qc = dot(q.xz, q.xz) - cy * cy;
+    float disc = qb * qb - qa * qc;
+    if (disc < 0.0) continue;
+    float sq = sqrt(disc);
+    float ta, tb;
+    if (abs(qa) < 1e-6) { ta = -qc / (2.0 * qb); tb = ta; }
+    else {
+      ta = (-qb - sq) / qa; tb = (-qb + sq) / qa;
+      if (ta > tb) { float tmp = ta; ta = tb; tb = tmp; }
+    }
+    for (int s = 0; s < 2; s++) {
+      float tt = (s == 0) ? ta : tb;
+      if (tt > TMIN && tt < best) {
+        float y = q.y + rd.y * tt;
+        if (y >= y0 && y <= y0 + hr) {
+          best = tt; hit = true;
+          vec3 p = q + rd * tt;
+          float rr = cy + k * rd.y * tt;
+          n = normalize(vec3(p.x, -k * rr, p.z));
+        }
+      }
+    }
+  }
+  // горловина: венчик, внутренняя стенка и дно углубления
+  float yTop = H, yFl = H - 0.03;
+  if (rd.y < 0.0) {
+    float tt = (yTop - q.y) / rd.y;
+    if (tt > TMIN && tt < best) {
+      vec2 pp = q.xz + rd.xz * tt; float r2 = dot(pp, pp);
+      if (r2 <= rim * rim && r2 >= rin * rin) { best = tt; hit = true; n = vec3(0.0, 1.0, 0.0); }
+    }
+    tt = (yFl - q.y) / rd.y;
+    if (tt > TMIN && tt < best) {
+      vec2 pp = q.xz + rd.xz * tt;
+      if (dot(pp, pp) < rin * rin) { best = tt; hit = true; n = vec3(0.0, 1.0, 0.0); }
+    }
+  }
+  float wa = dot(rd.xz, rd.xz);
+  if (wa > 1e-7) {
+    float wb = dot(q.xz, rd.xz);
+    float wc = dot(q.xz, q.xz) - rin * rin;
+    float wd = wb * wb - wa * wc;
+    if (wd >= 0.0) {
+      float ws = sqrt(wd);
+      for (int s = 0; s < 2; s++) {
+        float tt = ((s == 0) ? (-wb - ws) : (-wb + ws)) / wa;
+        if (tt > TMIN && tt < best) {
+          float y = q.y + rd.y * tt;
+          if (y >= yFl && y <= yTop) {
+            best = tt; hit = true;
+            vec3 p = q + rd * tt;
+            n = vec3(-p.x, 0.0, -p.z) / rin;
+          }
+        }
+      }
+    }
+  }
+  return hit ? best : -1.0;
+}
+
+// Ближайшее пересечение с предметами. anyHit = true: достаточно любого (для теней).
+float sceneIntersect(vec3 ro, vec3 rd, float tmax, bool anyHit, out float oid, out vec3 on) {
+  oid = 0.0; on = vec3(0.0, 1.0, 0.0);
+  vec2 bb = aabb(ro, rd);
+  float best = min(bb.y, tmax);
+  if (best <= max(bb.x, 0.0)) return -1.0;
+  bool hit = false;
+  vec3 inv = safeInv(rd);
+  for (int i = 0; i < NB; i++) {
+    vec3 c = WC[i], h = WH[i];
+    vec3 t0 = (c - h - ro) * inv, t1 = (c + h - ro) * inv;
+    vec3 tn = min(t0, t1), tf = max(t0, t1);
+    float tN = max(max(tn.x, tn.y), tn.z), tF = min(min(tf.x, tf.y), tf.z);
+    if (tN <= tF && tN > TMIN && tN < best) {
+      best = tN; hit = true; oid = WID[i];
+      on = -sign(rd) * step(tn.yzx, tn.xyz) * step(tn.zxy, tn.xyz);
+      if (anyHit) return best;
+    }
+  }
+  vec3 cn;
+  float tc = hitCloth(ro, rd, best, cn);
+  if (tc > 0.0) { best = tc; hit = true; oid = 5.0; on = cn; if (anyHit) return best; }
+  for (int i = 0; i < NV; i++) {
+    vec3 vn;
+    float tv = hitVase(i, ro, rd, inv, best, vn);
+    if (tv > 0.0 && tv < best) {
+      best = tv; hit = true; oid = 10.0 + float(i); on = vn;
+      if (anyHit) return best;
+    }
+  }
+  return hit ? best : -1.0;
 }
 
 // ---------- окно ----------
@@ -346,8 +430,8 @@ vec3 wallAlbedo(vec3 p, int wid) {
 }
 
 // ---------- объекты ----------
-void shadeObject(vec3 p, float id, out vec3 n, out vec3 ng, out vec3 alb) {
-  ng = calcN(p); n = ng;
+void shadeObject(vec3 p, float id, vec3 ngIn, out vec3 n, out vec3 ng, out vec3 alb) {
+  ng = ngIn; n = ng;
   if (id >= 9.5) {
     int i = int(id - 9.5);
     vec3 q = p - VP[i];
@@ -357,8 +441,9 @@ void shadeObject(vec3 p, float id, out vec3 n, out vec3 ng, out vec3 alb) {
     float ringH = H / 14.0;
     float ir = floor(q.y / ringH);
     if (uFacet > 0.5 && abs(ng.y) < 0.8 && q.y > 0.006 && q.y < H - 0.03) {
-      float qa = (ia + 0.5) * sa, qy = (ir + 0.5) * ringH, e = ringH * 0.5;
-      float slope = (vR(i, qy + e) - vR(i, qy - e)) / (2.0 * e);
+      float qa = (ia + 0.5) * sa;
+      int rj = int(clamp(ir, 0.0, 13.0));
+      float slope = (VRT[i * 15 + rj + 1] - VRT[i * 15 + rj]) / ringH;
       vec3 nf = normalize(vec3(cos(qa), -slope, sin(qa)));
       if (dot(nf, ng) > 0.7) n = nf;
     }
@@ -376,17 +461,8 @@ void shadeObject(vec3 p, float id, out vec3 n, out vec3 ng, out vec3 alb) {
 }
 
 bool occluded(vec3 ro, vec3 rd, float tmax) {
-  vec2 bb = aabb(ro, rd);
-  float t = max(bb.x, 0.0), te = min(bb.y, tmax);
-  if (te <= t) return false;
-  float id;
-  for (int i = 0; i < 72; i++) {
-    float d = map(ro + rd * t, id);
-    if (d < 0.0012) return true;
-    t += d;
-    if (t > te) return false;
-  }
-  return false;
+  float id; vec3 n;
+  return sceneIntersect(ro, rd, tmax, true, id, n) > 0.0;
 }
 
 // false = луч ушёл в окно
@@ -395,21 +471,11 @@ bool traceScene(vec3 ro, vec3 rd, out float t, out vec3 n, out vec3 ng, out vec3
   float tr = roomHit(ro, rd, rn, wid);
   vec3 q = ro + rd * tr;
   bool esc = (wid == 3) && inWindow(q.y, q.z);
-  vec2 bb = aabb(ro, rd);
-  float t0 = max(bb.x, 0.0), t1 = min(bb.y, tr);
-  float to = -1.0, id = 0.0;
-  if (t1 > t0) {
-    float tt = t0;
-    for (int i = 0; i < 110; i++) {
-      float d = map(ro + rd * tt, id);
-      if (d < 0.0007 + 0.0005 * tt) { to = tt; break; }
-      tt += d * 0.9;
-      if (tt > t1) break;
-    }
-  }
-  if (to >= 0.0) {
+  float id; vec3 on;
+  float to = sceneIntersect(ro, rd, tr, false, id, on);
+  if (to > 0.0) {
     t = to;
-    shadeObject(ro + rd * to, id, n, ng, alb);
+    shadeObject(ro + rd * to, id, on, n, ng, alb);
     return true;
   }
   if (esc) return false;
@@ -606,7 +672,25 @@ void main() {
     intFmt = gl.RGBA16F; texType = gl.HALF_FLOAT; maxSamples = 1000;
   }
 
-  function src(id) { return document.getElementById(id).textContent.trim(); }
+  // Данные кувшинов: один источник для шейдера (таблица радиусов по кольцам).
+  var VAd = [[0.62, 0.075, 0.155, 0.085], [0.44, 0.085, 0.147, 0.083], [0.56, 0.17, 0.27, 0.16], [0.2, 0.1, 0.16, 0.115], [0.4, 0.08, 0.125, 0.07], [0.72, 0.17, 0.22, 0.12], [0.26, 0.08, 0.135, 0.085]];
+  var VBd = [[0.115, 0.58, 0.88], [0.093, 0.42, 0.82], [0.17, 0.5, 0.9], [0.12, 0.4, 0.85], [0.085, 0.38, 0.82], [0.15, 0.5, 0.92], [0.095, 0.45, 0.88]];
+  function f5(v) { return v.toFixed(5); }
+  function vRj(a, b, y) {
+    var t = Math.min(1, Math.max(0, y / a[0]));
+    if (t < b[1]) { var u = t / b[1]; return a[1] + (a[2] - a[1]) * Math.sin(u * 1.5708); }
+    if (t < b[2]) { var v = (t - b[1]) / (b[2] - b[1]); return a[2] + (a[3] - a[2]) * (v * v * (3 - 2 * v)); }
+    var w = (t - b[2]) / (1 - b[2]);
+    return a[3] + (b[0] - a[3]) * w * w;
+  }
+  var VRTd = [];
+  VAd.forEach(function (a, i) { for (var j = 0; j <= 14; j++) VRTd.push(vRj(a, VBd[i], a[0] * j / 14)); });
+  var VASE_GLSL =
+    'const vec4 VA[NV] = vec4[NV](' + VAd.map(function (a) { return 'vec4(' + a.map(f5).join(',') + ')'; }).join(',') + ');\n' +
+    'const vec3 VB[NV] = vec3[NV](' + VBd.map(function (b) { return 'vec3(' + b.map(f5).join(',') + ')'; }).join(',') + ');\n' +
+    'uniform float VRT[' + VRTd.length + '];\n';
+
+  function src(id) { return document.getElementById(id).textContent.trim().replace('/*VASEDATA*/', VASE_GLSL); }
   function compile(type, code) {
     var s = gl.createShader(type); gl.shaderSource(s, code); gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { throw new Error(gl.getShaderInfoLog(s)); }
@@ -626,6 +710,8 @@ void main() {
   try { pt = program('vs', 'fsPT'); disp = program('vs', 'fsDisp'); dn = program('vs', 'fsDN'); }
   catch (e) { fail('Ошибка шейдера: ' + e.message); window.__glError = e.message; return; }
   gl.bindVertexArray(gl.createVertexArray());
+  gl.useProgram(pt.p);
+  gl.uniform1fv(pt.u['VRT[0]'], new Float32Array(VRTd));
 
   // ---------- состояние ----------
   var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false, full: true, target: 64, dn: true, dnPhi: 3, fpsFull: true };
