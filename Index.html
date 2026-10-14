@@ -1,5 +1,5 @@
 <!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
-<title>Пиксельный GI-движок</title>
+<title>Пиксельный GI-движок v10</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Pixelify+Sans:wght@500;600&display=swap" rel="stylesheet">
@@ -79,7 +79,7 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   <section class="stage" id="stage" aria-label="Окно рендера">
     <div class="frame" id="frame">
       <canvas id="view" width="100" height="160" aria-label="Сцена с глиняными кувшинами, посчитанная трассировкой путей"></canvas>
-      <div class="hud" id="hud"><span>сэмплов <b id="hSpp">0</b></span><span id="hRes">—</span><span id="hFpsWrap"><b id="hFps">—</b> <span id="hFpsL">полн. пересчёт</span></span></div>
+      <div class="hud" id="hud"><span>сэмплов <b id="hSpp">0</b></span><span>кэш <b id="hProbe">0</b></span><span id="hRes">—</span><span id="hFpsWrap"><b id="hFps">—</b> <span id="hFpsL">полн. пересчёт</span></span></div>
     </div>
     <div class="err" id="err" hidden></div>
   </section>
@@ -121,13 +121,16 @@ button:hover { border-color: var(--accent); color: var(--accent); }
     </fieldset>
 
     <fieldset>
-      <legend>Быстрый предпросмотр</legend>
-      <label class="sw"><span>Грубый свет-подсказка (слабый эффект)</span><input id="prior" data-k="prior" type="checkbox" checked></label>
+      <legend>Кэш непрямого света</legend>
+      <label class="sw"><span>Мягкий свет из кэша сразу</span><input id="prior" data-k="prior" type="checkbox" checked></label>
       <div class="row"><label for="priorK">Сэмплов до точного света</label><output id="o_priorK"></output>
-        <input id="priorK" data-k="priorK" type="range" min="1" max="64" step="1" value="1"></div>
-      <div class="row"><label for="priorAmt">Сила предсказания</label><output id="o_priorAmt"></output>
+        <input id="priorK" data-k="priorK" type="range" min="1" max="128" step="1" value="8"></div>
+      <div class="row"><label for="priorAmt">Яркость кэша</label><output id="o_priorAmt"></output>
         <input id="priorAmt" data-k="priorAmt" type="range" min="0" max="2" step="0.05" value="1"></div>
-      <p class="note">Прямой свет и тени от солнца и окна считаются ровнее, чем раньше, и почти сразу чёткие. Мягкий отражённый свет сначала показывается грубой прикидкой, потом плавно заменяется честным расчётом. Конечная картинка не меняется.</p>
+      <label class="sw"><span>Отскоки после первого брать из кэша</span><input id="fg" data-k="fg" type="checkbox" checked></label>
+      <label class="sw"><span>Показать только кэш</span><input id="cacheOnly" data-k="cacheOnly" type="checkbox"></label>
+      <p class="note">По всей комнате расставлено около 23 тысяч невидимых проб. Каждая за пару секунд собирает, какой отражённый свет приходит в её точку с разных сторон. Пробы не зависят от камеры, поэтому при повороте и приближении мягкий свет от кирпича и глины виден в первом же кадре, а не проявляется постепенно. Пересчитываются они только при смене света, отскоков или граней. Число в углу кадра показывает, сколько путей уже собрала каждая проба.</p>
+      <p class="note">Первый переключатель показывает кэш, пока честный расчёт копит сэмплы, и плавно отдаёт ему место: конечная картинка от этого не меняется. Второй делает каждый сэмпл короче: после первого отражения путь не идёт дальше, а берёт остаток света из кэша. Шума и работы заметно меньше, но картинка становится слегка приближённой.</p>
     </fieldset>
 
     <fieldset>
@@ -183,11 +186,27 @@ uniform float uFacet, uAA;
 uniform int uDebug;
 uniform int uDirN;
 uniform float uDirBase;
+uniform sampler2D uPrevD;
+// кэш непрямого света: сетка проб, в каждой SH первого порядка
+uniform sampler2D uP0, uP1, uP2, uP3;
+uniform int uFG;        // 1 = отскоки после первого берутся из кэша
+uniform int uProbeB;    // сколько отскоков учитывает проба
+uniform float uPN;      // сэмплов уже накоплено в пробах
+uniform int uPS;        // сэмплов на пробу за этот проход
+uniform sampler2D uGb;  // G-буфер для прохода сбора
+#if PASS == 0
 layout(location = 0) out vec4 outC;
 layout(location = 1) out vec4 outG;
 layout(location = 2) out vec4 outA;
 layout(location = 3) out vec4 outD;
-uniform sampler2D uPrevD;
+#elif PASS == 1
+layout(location = 0) out vec4 outP0;
+layout(location = 1) out vec4 outP1;
+layout(location = 2) out vec4 outP2;
+layout(location = 3) out vec4 outP3;
+#else
+out vec4 outX;
+#endif
 
 const float PI = 3.14159265359;
 
@@ -555,11 +574,90 @@ vec3 cosDir(vec3 n, vec2 uu) {
   return normalize(t * cos(phi) * sr + b * sin(phi) * sr + n * sqrt(1.0 - r2));
 }
 
-vec3 pathTrace(vec3 ro, vec3 rd) {
+// ---------- кэш непрямого света ----------
+// Сетка проб по всей комнате (не зависит от камеры). Проба хранит падающий на неё
+// отражённый свет в виде сферических гармоник 1-го порядка: из неё можно взять
+// «мягкий свет» для поверхности с любой нормалью. Прямой свет в кэш не входит.
+const ivec3 GN = ivec3(32, 24, 30);
+const vec3 GMIN = vec3(XMIN, 0.0, ZMIN);
+const vec3 GSTEP = vec3((XMAX - XMIN) / 32.0, YMAX / 24.0, (ZMAX - ZMIN) / 30.0);
+vec3 probePos(ivec3 c) { return GMIN + (vec3(c) + 0.5) * GSTEP; }
+ivec2 probeTexel(ivec3 c) { return ivec2(c.x + c.z * GN.x, c.y); }
+
+// Проба внутри предмета (доска, ножка, тело кувшина) ничего полезного не видит: выключаем её.
+bool insideSolid(vec3 p) {
+  for (int i = 0; i < NB; i++) {
+    if (all(lessThan(abs(p - WC[i]), WH[i] + 0.012))) return true;
+  }
+  for (int i = 0; i < NV; i++) {
+    vec3 q = p - VP[i];
+    float H = VA[i].x;
+    if (q.y > -0.012 && q.y < H + 0.012) {
+      float hr = H / 14.0;
+      float fy = clamp(q.y / hr, 0.0, 13.999);
+      int j = int(fy);
+      float r = mix(VRT[i * 15 + j], VRT[i * 15 + j + 1], fy - float(j));
+      if (length(q.xz) < r + 0.012) return true;
+    }
+  }
+  return false;
+}
+
+// SH1 -> «освещённость / π» для нормали n (то же, что яркость белой стены с этой нормалью).
+vec3 shEval(ivec2 tc, vec3 n) {
+  vec3 c0 = texelFetch(uP0, tc, 0).rgb;
+  vec3 cx = texelFetch(uP1, tc, 0).rgb, cy = texelFetch(uP2, tc, 0).rgb, cz = texelFetch(uP3, tc, 0).rgb;
+  return max(0.282095 * c0 + 0.325735 * (cx * n.x + cy * n.y + cz * n.z), vec3(0.0));
+}
+
+// Трилинейная смесь 8 соседних проб. Пробы за спиной у поверхности и пробы,
+// закрытые предметами (vis = true: проверка теневым лучом), почти не учитываются,
+// поэтому свет не протекает сквозь полки и стенки кувшинов.
+vec3 cacheX(vec3 p, vec3 n, bool vis) {
+  vec3 g = clamp((p - GMIN) / GSTEP - 0.5, vec3(0.0), vec3(GN) - 1.001);
+  ivec3 b = ivec3(floor(g));
+  vec3 f = g - vec3(b);
+  vec3 acc = vec3(0.0);
+  float ws = 0.0;
+  for (int i = 0; i < 8; i++) {
+    ivec3 o = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+    ivec3 c = min(b + o, GN - 1);
+    ivec2 tc = probeTexel(c);
+    if (texelFetch(uP0, tc, 0).a < 0.5) continue;
+    vec3 tri = mix(1.0 - f, f, vec3(o));
+    float w = tri.x * tri.y * tri.z + 1e-4;
+    vec3 d = probePos(c) - p;
+    float dl = max(length(d), 1e-4);
+    vec3 dn = d / dl;
+    float wb = (dot(dn, n) + 1.0) * 0.5;
+    w *= wb * wb + 0.02;
+    if (vis && occluded(p, dn, dl)) w *= 1e-4;
+    acc += shEval(tc, n) * w;
+    ws += w;
+  }
+  if (ws > 0.0) return acc / ws;
+  // Все 8 соседей внутри предметов (узкая щель между кувшинами, угол у полки):
+  // ищем ближайшие рабочие пробы в кубе 4×4×4 вокруг точки.
+  for (int i = 0; i < 64; i++) {
+    ivec3 c = clamp(b + ivec3(i & 3, (i >> 2) & 3, (i >> 4) & 3) - 1, ivec3(0), GN - 1);
+    ivec2 tc = probeTexel(c);
+    if (texelFetch(uP0, tc, 0).a < 0.5) continue;
+    vec3 d = probePos(c) - p;
+    float d2 = max(dot(d, d), 1e-4);
+    float wb = (dot(d, n) * inversesqrt(d2) + 1.0) * 0.5;
+    float w = (wb * wb + 0.02) / (d2 * d2);
+    acc += shEval(tc, n) * w;
+    ws += w;
+  }
+  return ws > 0.0 ? acc / ws : vec3(0.0);
+}
+
+// b0 = номер вершины, с которой начинается путь (0 = из камеры, 1 = из пробы);
+// nb = последний учитываемый отскок; fg = после первого отскока взять остальное из кэша.
+vec3 tracePath(vec3 ro, vec3 rd, int b0, int nb, bool fg) {
   vec3 L = vec3(0.0), thr = vec3(1.0);
-  gN = vec3(0.0); gAlb = vec3(1.0); gT = 1000.0; gDir = vec3(0.0); gPrior = 0.0;
-  for (int b = 0; b < 8; b++) {
-    if (b > uBounces) break;
+  for (int b = b0; b < 8; b++) {
+    if (b > nb) break;
     float t; vec3 n, ng, alb;
     if (!traceScene(ro, rd, t, n, ng, alb)) {
       if (b == 0) { vec3 sk = SKYCOL * uSkyI * 0.3; L += sk; gDir = sk; }
@@ -585,7 +683,12 @@ vec3 pathTrace(vec3 ro, vec3 rd) {
       gDir = dE;
     }
     L += thr * dE;
-    if (b == uBounces) L += thr * alb * SKYCOL * uSkyI * 0.035;
+    if (fg && b == 1 && b < nb) {
+      // финальный сбор: всё, что отразилось дальше, берём из прогретого кэша
+      L += thr * alb * cacheX(pos, n, false);
+      break;
+    }
+    if (b == nb) L += thr * alb * SKYCOL * uSkyI * 0.035;
     thr *= alb;
     rd = cosDir(n, (b == 0) ? lds(2) : vec2(rnd(), rnd()));
     ro = pos;
@@ -593,6 +696,55 @@ vec3 pathTrace(vec3 ro, vec3 rd) {
   return L;
 }
 
+vec3 pathTrace(vec3 ro, vec3 rd) {
+  gN = vec3(0.0); gAlb = vec3(1.0); gT = 1000.0; gDir = vec3(0.0); gPrior = 0.0;
+  return tracePath(ro, rd, 0, uBounces, uFG == 1);
+}
+
+#if PASS == 1
+// ---------- проход 1: обновление проб ----------
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  ivec3 c = ivec3(ip.x % GN.x, ip.y, ip.x / GN.x);
+  vec3 pp = probePos(c);
+  s0 = pcg(uint(ip.x) + pcg(uint(ip.y) + pcg(uSeed)));
+  uint hh = pcg(uint(ip.x) * 7919u + uint(ip.y) * 104729u + 12345u);
+  vec2 rot = vec2(float(hh), float(pcg(hh))) * (1.0 / 4294967296.0);
+  bool valid = !insideSolid(pp);
+  vec3 a0 = vec3(0.0), ax = vec3(0.0), ay = vec3(0.0), az = vec3(0.0);
+  if (valid) {
+    for (int s = 0; s < 32; s++) {
+      if (s >= uPS) break;
+      // ровно распределённые по сфере направления (Kronecker со сдвигом на пробу)
+      vec2 u = fract(rot + (uPN + float(s)) * vec2(0.7548776662, 0.5698402910));
+      float z = 1.0 - 2.0 * u.x, r = sqrt(max(0.0, 1.0 - z * z)), ph = 2.0 * PI * u.y;
+      vec3 d = vec3(r * cos(ph), z, r * sin(ph));
+      vec3 L = min(tracePath(pp, d, 1, uProbeB, false), vec3(20.0)) * (4.0 * PI);
+      a0 += L * 0.282095;
+      ax += L * (0.488603 * d.x); ay += L * (0.488603 * d.y); az += L * (0.488603 * d.z);
+    }
+  }
+  float n0 = uReset > 0.5 ? 0.0 : uPN, nn = n0 + float(uPS);
+  outP0 = vec4((texelFetch(uP0, ip, 0).rgb * n0 + a0) / nn, valid ? 1.0 : 0.0);
+  outP1 = vec4((texelFetch(uP1, ip, 0).rgb * n0 + ax) / nn, 1.0);
+  outP2 = vec4((texelFetch(uP2, ip, 0).rgb * n0 + ay) / nn, 1.0);
+  outP3 = vec4((texelFetch(uP3, ip, 0).rgb * n0 + az) / nn, 1.0);
+}
+#elif PASS == 2
+// ---------- проход 2: мягкий свет из кэша для каждого пикселя кадра ----------
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  vec4 G = texelFetch(uGb, ip, 0);
+  if (G.w > 900.0) { outX = vec4(0.0); return; }
+  vec2 uv = gl_FragCoord.xy / uRes * 2.0 - 1.0;
+  vec3 rd = normalize(uCamF + uCamR * (uv.x * uTanV * uAspect) + uCamU * (uv.y * uTanV));
+  vec3 n = normalize(G.xyz);
+  vec3 p = uCamPos + rd * G.w + n * 0.01;
+  vec3 X = cacheX(p, n, true);
+  if (uBounces == 0) X = SKYCOL * uSkyI * 0.035;
+  outX = vec4(X, 1.0);
+}
+#else
 void main() {
   ivec2 ip = ivec2(gl_FragCoord.xy);
   gN = vec3(0.0); gAlb = vec3(1.0); gT = 1000.0; gDir = vec3(0.0); gPrior = 0.0; gDoPrior = false; gSidx = 0.0;
@@ -634,6 +786,7 @@ void main() {
   outG = vec4(gN, gT);
   outA = vec4(gAlb, prior);
 }
+#endif
 </script>
 
 <script id="fsDN" type="x-shader/x-fragment">
@@ -692,12 +845,10 @@ void main() {
 precision highp float;
 precision highp int;
 precision highp sampler2D;
-uniform sampler2D uTex, uAlb, uTot, uDir, uG;
+uniform sampler2D uTex, uAlb, uTot, uDir, uCache;
 uniform vec2 uRes, uOut;
-uniform float uExposure, uLevels, uDN, uPriorOn, uK;
-uniform vec3 uKc[7];
-uniform vec3 uCamPos, uCamF, uCamR, uCamU;
-uniform float uTanV, uAspect, uPriorAmt;
+uniform float uExposure, uLevels, uDN, uPriorOn, uK, uCacheOnly;
+uniform float uPriorAmt;
 out vec4 outC;
 
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
@@ -712,20 +863,11 @@ void main() {
   vec4 T = texelFetch(uTot, ti, 0);
   vec3 dir = texelFetch(uDir, ti, 0).rgb;
   vec3 ind = (uDN > 0.5) ? texelFetch(uTex, ti, 0).rgb * A.rgb : max(T.rgb - dir, vec3(0.0));
-  if (uPriorOn > 0.5) {
-    // дешёвое предсказание непрямого света, которое по мере накопления уступает точному
-    // Грубая оценка отражённого света по направлению и положению поверхности:
-    // линейная модель, подобранная по эталонным кадрам (даёт тёплый тон и разную яркость по комнате).
-    vec4 G = texelFetch(uG, ti, 0);
-    vec2 uvp = (vec2(ti) + 0.5) / uRes * 2.0 - 1.0;
-    vec3 rdp = normalize(uCamF + uCamR * (uvp.x * uTanV * uAspect) + uCamU * (uvp.y * uTanV));
-    vec3 pp = uCamPos + rdp * G.w;
-    vec3 fe = vec3(0.0);
-    fe += uKc[0] * G.x + uKc[1] * G.y + uKc[2] * G.z;
-    fe += uKc[3] * pp.x + uKc[4] * pp.y + uKc[5] * pp.z + uKc[6];
-    vec3 pr = (G.w < 900.0) ? A.rgb * max(fe, vec3(0.0)) * uPriorAmt : vec3(0.0);
-    ind = mix(pr, ind, T.a / (T.a + uK));
-  }
+  // мягкий свет из кэша проб: виден сразу после сдвига камеры и уступает
+  // честному расчёту по мере накопления сэмплов
+  vec3 pr = A.rgb * texelFetch(uCache, ti, 0).rgb * uPriorAmt;
+  if (uCacheOnly > 0.5) ind = pr;
+  else if (uPriorOn > 0.5) ind = mix(pr, ind, T.a / (T.a + uK));
   vec3 c = dir + ind;
   c *= uExposure;
   c = aces(c);
@@ -774,41 +916,44 @@ void main() {
     'const vec3 VB[NV] = vec3[NV](' + VBd.map(function (b) { return 'vec3(' + b.map(f5).join(',') + ')'; }).join(',') + ');\n' +
     'uniform float VRT[' + VRTd.length + '];\n';
 
-  function src(id) { return document.getElementById(id).textContent.trim().replace('/*VASEDATA*/', VASE_GLSL); }
+  function src(id, pass) {
+    var t = document.getElementById(id).textContent.trim().replace('/*VASEDATA*/', VASE_GLSL);
+    var nl = t.indexOf('\n');
+    return t.slice(0, nl) + '\n#define PASS ' + (pass || 0) + t.slice(nl);
+  }
   function compile(type, code) {
     var s = gl.createShader(type); gl.shaderSource(s, code); gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { throw new Error(gl.getShaderInfoLog(s)); }
     return s;
   }
-  function program(vsId, fsId) {
+  function program(vsId, fsId, pass) {
     var p = gl.createProgram();
     gl.attachShader(p, compile(gl.VERTEX_SHADER, src(vsId)));
-    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, src(fsId)));
+    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, src(fsId, pass)));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { throw new Error(gl.getProgramInfoLog(p)); }
     var u = {}, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
     for (var i = 0; i < n; i++) { var nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); }
     return { p: p, u: u };
   }
-  var pt, disp, dn;
-  try { pt = program('vs', 'fsPT'); disp = program('vs', 'fsDisp'); dn = program('vs', 'fsDN'); }
+  var pt, disp, dn, prb, gat;
+  try { pt = program('vs', 'fsPT', 0); prb = program('vs', 'fsPT', 1); gat = program('vs', 'fsPT', 2); disp = program('vs', 'fsDisp'); dn = program('vs', 'fsDN'); }
   catch (e) { fail('Ошибка шейдера: ' + e.message); window.__glError = e.message; return; }
   gl.bindVertexArray(gl.createVertexArray());
-  gl.useProgram(pt.p);
-  gl.uniform1fv(pt.u['VRT[0]'], new Float32Array(VRTd));
+  [pt, prb, gat].forEach(function (pg) { gl.useProgram(pg.p); if (pg.u['VRT[0]']) gl.uniform1fv(pg.u['VRT[0]'], new Float32Array(VRTd)); });
 
   // ---------- состояние ----------
-  var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false, full: true, target: 64, dn: true, dnPhi: 3, fpsFull: true, unlock: true, sway: false, prior: true, priorK: 1, priorAmt: 1 };
+  var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false, full: true, target: 64, dn: true, dnPhi: 3, fpsFull: true, unlock: true, sway: false, prior: true, priorK: 8, priorAmt: 1, fg: true, cacheOnly: false };
   var cam = { yaw: 0, pitch: 0, k: 1 };
   var msAvg = 0, lastRec = 0;
   var dirBase = 0;
   var W = 0, H = 0, tex = [], fbo = [], cur = 0, count = 0, needReset = true, frameNo = 1, spp = 2;
-  var outW = 0, outH = 0, interacting = 0;
+  var outW = 0, outH = 0, interacting = 0, gatherDirty = true;
 
-  function mkTex() {
+  function mkTex(tw, th) {
     var t = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, t);
-    gl.texImage2D(gl.TEXTURE_2D, 0, intFmt, W, H, 0, gl.RGBA, texType, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, intFmt, tw || W, th || H, 0, gl.RGBA, texType, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -827,9 +972,10 @@ void main() {
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) { fail('Не удалось создать float-буфер для накопления кадров.'); }
     return f;
   }
-  var gTex = null, aTex = null, dnTex = [], dnFbo = [], dTex = [];
+  var gTex = null, aTex = null, dnTex = [], dnFbo = [], dTex = [], cTex = null, cFbo = null;
   function allocTargets() {
-    var old = tex.concat(dnTex, dTex, [gTex, aTex]);
+    var old = tex.concat(dnTex, dTex, [gTex, aTex, cTex]);
+    if (cFbo) gl.deleteFramebuffer(cFbo);
     for (var i = 0; i < old.length; i++) { if (old[i]) gl.deleteTexture(old[i]); }
     for (var j0 = 0; j0 < fbo.length; j0++) gl.deleteFramebuffer(fbo[j0]);
     for (var j1 = 0; j1 < dnFbo.length; j1++) gl.deleteFramebuffer(dnFbo[j1]);
@@ -843,9 +989,81 @@ void main() {
       var d = mkTex();
       dnTex.push(d); dnFbo.push(mkFbo([d]));
     }
+    cTex = mkTex(); cFbo = mkFbo([cTex]);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     document.getElementById('hRes').textContent = W + '×' + H + ' px';
     needReset = true;
+  }
+
+  // ---------- кэш проб ----------
+  // Сетка 32×24×30 проб по всей комнате; в текстуре лежит как (x + z·32, y).
+  // Пробы не зависят от камеры, поэтому при повороте камеры кэш не сбрасывается,
+  // а только при смене света, числа отскоков или формы кувшинов.
+  var GNX = 32, GNY = 24, GNZ = 30, PW = GNX * GNZ, PH = GNY;
+  var PROBE_MAX = 2048, PROBE_MILESTONES = [64, 256, 1024, 2048];
+  var probe = { tex: [[], []], fbo: [], cur: 0, n: 0, reset: true };
+  for (var pi = 0; pi < 2; pi++) {
+    for (var pk = 0; pk < 4; pk++) probe.tex[pi].push(mkTex(PW, PH));
+    probe.fbo.push(mkFbo(probe.tex[pi]));
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  function cacheWanted() { return S.prior || S.fg || S.cacheOnly; }
+  function bindProbes(u) {
+    for (var k = 0; k < 4; k++) {
+      gl.activeTexture(gl.TEXTURE4 + k); gl.bindTexture(gl.TEXTURE_2D, probe.tex[probe.cur][k]);
+      gl.uniform1i(u['uP' + k], 4 + k);
+    }
+  }
+  function sunDir() {
+    var az = S.sunAz * Math.PI / 180, el = S.sunEl * Math.PI / 180;
+    return [Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)];
+  }
+  function sceneUniforms(u) {
+    gl.uniform3fv(u.uSunDir, sunDir());
+    gl.uniform1f(u.uSunI, S.sunI); gl.uniform1f(u.uSkyI, S.skyI);
+    gl.uniform1i(u.uBounces, S.bounces);
+    gl.uniform1f(u.uFacet, S.facets ? 1 : 0);
+    gl.uniform1i(u.uFG, S.fg ? 1 : 0);
+    gl.uniform1i(u.uProbeB, S.fg ? Math.max(S.bounces - 1, 0) : S.bounces);
+  }
+  // Один проход: каждой пробе добавляется m путей. Возвращает true, если кэш изменился.
+  function updateProbes() {
+    if (!cacheWanted()) return false;
+    if (!probe.reset && probe.n >= PROBE_MAX) return false;
+    var n0 = probe.reset ? 0 : probe.n, m = n0 < 32 ? 16 : 8, u = prb.u, dst = 1 - probe.cur;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, probe.fbo[dst]);
+    gl.viewport(0, 0, PW, PH);
+    gl.useProgram(prb.p);
+    bindProbes(u);
+    sceneUniforms(u);
+    gl.uniform1f(u.uPN, n0); gl.uniform1i(u.uPS, m);
+    gl.uniform1f(u.uReset, probe.reset ? 1 : 0);
+    gl.uniform1ui(u.uSeed, (frameNo++ * 2654435761) >>> 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    probe.cur = dst;
+    var was = n0;
+    probe.n = n0 + m; probe.reset = false;
+    // финальный сбор берёт отскоки из кэша: когда кэш заметно уточнился, кадр пересчитывается
+    if (S.fg && S.bounces > 1) {
+      for (var i = 0; i < PROBE_MILESTONES.length; i++) {
+        if (was > 0 && was < PROBE_MILESTONES[i] && probe.n >= PROBE_MILESTONES[i]) needReset = true;
+      }
+    }
+    return true;
+  }
+  // Мягкий свет из кэша для пикселей кадра (по G-буферу последнего прохода).
+  function gatherCache() {
+    var u = gat.u, b = cameraBasis();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, cFbo);
+    gl.viewport(0, 0, W, H);
+    gl.useProgram(gat.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gTex); gl.uniform1i(u.uGb, 0);
+    bindProbes(u);
+    sceneUniforms(u);
+    gl.uniform2f(u.uRes, W, H);
+    gl.uniform3fv(u.uCamPos, b.pos); gl.uniform3fv(u.uCamF, b.f); gl.uniform3fv(u.uCamR, b.r); gl.uniform3fv(u.uCamU, b.u);
+    gl.uniform1f(u.uTanV, 0.649); gl.uniform1f(u.uAspect, ASPECT);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
   // ---------- камера ----------
@@ -868,16 +1086,9 @@ void main() {
     return { pos: pos, f: fwd, r: r, u: u };
   }
 
-  // Средний непрямой свет на единицу яркости солнца и неба (подобран по сходящейся картинке).
-  // Коэффициенты предсказания отражённого света на единицу яркости солнца и неба.
-  // Признаки: нормаль (x, y, z), положение (x, y, z), единица. Подобраны по эталонным кадрам.
-  var PRI_SUN = [[-0.00912, -0.00398, -0.00133], [-0.01429, -0.00722, -0.00275], [-0.02067, -0.00841, -0.00244], [0.00665, 0.00367, 0.00126], [-0.0092, -0.00499, -0.00191], [-0.01318, -0.00497, -0.00151], [0.01927, 0.00967, 0.00317]], PRI_SKY = [[0.00019, 0.00137, 0.00165], [0.00145, 0.00283, 0.00336], [0.00201, 0.00586, 0.00909], [0.00977, 0.0107, 0.01103], [0.00646, 0.00673, 0.00667], [0.00979, 0.01298, 0.01484], [0.03248, 0.03107, 0.03032]];
-
   // ---------- рендер ----------
   function renderPT(n) {
     var dst = 1 - cur, b = cameraBasis();
-    var az = S.sunAz * Math.PI / 180, el = S.sunEl * Math.PI / 180;
-    var sd = [Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)];
     var u = pt.u;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo[dst]);
     gl.viewport(0, 0, W, H);
@@ -896,10 +1107,10 @@ void main() {
     gl.uniform1f(u.uReset, needReset ? 1 : 0);
     gl.uniform3fv(u.uCamPos, b.pos); gl.uniform3fv(u.uCamF, b.f); gl.uniform3fv(u.uCamR, b.r); gl.uniform3fv(u.uCamU, b.u);
     gl.uniform1f(u.uTanV, 0.649); gl.uniform1f(u.uAspect, ASPECT);
-    gl.uniform3fv(u.uSunDir, sd);
-    gl.uniform1f(u.uSunI, S.sunI); gl.uniform1f(u.uSkyI, S.skyI);
-    gl.uniform1i(u.uBounces, S.bounces);
-    gl.uniform1i(u.uDebug, window.__debug ? 1 : 0); gl.uniform1f(u.uFacet, S.facets ? 1 : 0); gl.uniform1f(u.uAA, S.aa ? 1 : 0);
+    sceneUniforms(u);
+    gl.uniform1i(u.uFG, S.fg && probe.n > 0 ? 1 : 0);
+    bindProbes(u);
+    gl.uniform1i(u.uDebug, window.__debug ? 1 : 0); gl.uniform1f(u.uAA, S.aa ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     count = needReset ? n : count + n;
     needReset = false; cur = dst;
@@ -934,12 +1145,11 @@ void main() {
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, dTex[cur]);
     gl.uniform1i(disp.u.uTex, 0); gl.uniform1i(disp.u.uAlb, 1); gl.uniform1i(disp.u.uTot, 2); gl.uniform1i(disp.u.uDir, 3);
     gl.uniform1f(disp.u.uPriorOn, S.prior ? 1 : 0); gl.uniform1f(disp.u.uK, S.priorK);
-    var kc = new Float32Array(21), cb = cameraBasis();
-    for (var ki = 0; ki < 7; ki++) for (var kj = 0; kj < 3; kj++) kc[ki * 3 + kj] = PRI_SUN[ki][kj] * S.sunI + PRI_SKY[ki][kj] * S.skyI;
-    gl.uniform3fv(disp.u['uKc[0]'], kc);
-    gl.uniform3fv(disp.u.uCamPos, cb.pos); gl.uniform3fv(disp.u.uCamF, cb.f); gl.uniform3fv(disp.u.uCamR, cb.r); gl.uniform3fv(disp.u.uCamU, cb.u);
-    gl.uniform1f(disp.u.uTanV, 0.649); gl.uniform1f(disp.u.uAspect, ASPECT); gl.uniform1f(disp.u.uPriorAmt, S.priorAmt);
-    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, gTex); gl.uniform1i(disp.u.uG, 4);
+    gl.uniform1f(disp.u.uPriorAmt, S.priorAmt);
+    var useCache = cacheWanted() && probe.n > 0;
+    gl.uniform1f(disp.u.uPriorOn, S.prior && useCache ? 1 : 0);
+    gl.uniform1f(disp.u.uCacheOnly, S.cacheOnly && useCache ? 1 : 0);
+    gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, cTex); gl.uniform1i(disp.u.uCache, 5);
     gl.uniform1f(disp.u.uDN, S.dn ? 1 : 0);
     gl.uniform2f(disp.u.uRes, W, H);
     gl.uniform2f(disp.u.uOut, outW, outH);
@@ -979,14 +1189,17 @@ void main() {
       S[k] = v;
       if (k === 'fpsFull') { msAvg = 0; lastRec = 0; recent = []; }
       if (out) out.textContent = fmt[k](v);
-      if (k === 'levels' || k === 'exposure' || k === 'full' || k === 'target' || k === 'dn' || k === 'dnPhi' || k === 'fpsFull' || k === 'unlock' || k === 'sway' || k === 'prior' || k === 'priorK' || k === 'priorAmt') return;
+      if (k === 'prior' || k === 'cacheOnly') gatherDirty = true;
+      if (k === 'levels' || k === 'exposure' || k === 'full' || k === 'target' || k === 'dn' || k === 'dnPhi' || k === 'fpsFull' || k === 'unlock' || k === 'sway' || k === 'prior' || k === 'priorK' || k === 'priorAmt' || k === 'cacheOnly') return;
+      // свет и геометрия меняют сам кэш; камера, разрешение и сглаживание его не трогают
+      if (k === 'bounces' || k === 'sunI' || k === 'skyI' || k === 'sunAz' || k === 'sunEl' || k === 'facets' || k === 'fg') probe.reset = true;
       if (rowsChanged) allocTargets(); else needReset = true;
     }
     el.addEventListener('input', apply);
     if (out) out.textContent = fmt[k](el.type === 'checkbox' ? el.checked : parseFloat(el.value));
   });
   document.getElementById('resetCam').addEventListener('click', function () { cam.yaw = 0; cam.pitch = 0; cam.k = 1; needReset = true; });
-  document.getElementById('resetAcc').addEventListener('click', function () { needReset = true; });
+  document.getElementById('resetAcc').addEventListener('click', function () { needReset = true; probe.reset = true; });
 
   var drag = null;
   canvas.style.touchAction = 'none';
@@ -1007,7 +1220,7 @@ void main() {
   }, { passive: false });
 
   // ---------- цикл ----------
-  var last = performance.now(), fpsAvg = 30, tick = 0, hSpp = document.getElementById('hSpp'), hFps = document.getElementById('hFps'), hFpsL = document.getElementById('hFpsL'), hFpsWrap = document.getElementById('hFpsWrap');
+  var last = performance.now(), fpsAvg = 30, tick = 0, hSpp = document.getElementById('hSpp'), hFps = document.getElementById('hFps'), hFpsL = document.getElementById('hFpsL'), hFpsWrap = document.getElementById('hFpsWrap'), hProbe = document.getElementById('hProbe');
   var burstQ = [], polling = false, lastDone = 0, mc = new MessageChannel();
   var recCount = 0, trackedN = 0;
   var recent = [], warm = false;
@@ -1043,7 +1256,7 @@ void main() {
   }
   function fmtFps(v) { return v < 10 ? v.toFixed(1) : String(Math.round(v)); }
   window.__gi = { get count() { return count; }, get ms() { return msAvg; }, get q() { return burstQ.length; }, get recs() { return recCount; }, get tracked() { return trackedN; }, get tick() { return tick; }, dump: function () { gl.bindFramebuffer(gl.FRAMEBUFFER, fbo[cur]); var out = { W: W, H: H }; [[0, 'tot'], [1, 'g'], [2, 'alb'], [3, 'dir']].forEach(function (a) { gl.readBuffer(gl.COLOR_ATTACHMENT0 + a[0]); var buf = new Float32Array(W * H * 4); gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, buf); out[a[1]] = Array.from(buf); out['err_' + a[1]] = gl.getError(); });
- out.f32 = (intFmt === gl.RGBA32F); out.readType = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_TYPE); out.readFmt = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_FORMAT); gl.bindFramebuffer(gl.FRAMEBUFFER, null); return out; }, S: S, setSpp: function (n) { spp = n; }, snap: function () { display(); return canvas.toDataURL('image/png'); } };
+ out.f32 = (intFmt === gl.RGBA32F); out.readType = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_TYPE); out.readFmt = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_FORMAT); gl.bindFramebuffer(gl.FRAMEBUFFER, null); return out; }, S: S, probe: probe, setSpp: function (n) { spp = n; }, snap: function () { display(); return canvas.toDataURL('image/png'); } };
   var mcLoop = new MessageChannel();
   mcLoop.port1.onmessage = function () { loop(performance.now()); };
   function waitGpu() { setTimeout(function () { loop(performance.now()); }, 0); }
@@ -1056,6 +1269,7 @@ void main() {
     tick++;
     if (S.sway) { cam.yaw = 0.3 * Math.sin(now / 650); cam.pitch = 0.08 * Math.sin(now / 910); needReset = true; }
     var work = false, burst = false, tb = performance.now();
+    var probesChanged = updateProbes();
     if (S.full && (needReset || count < S.target)) {
       work = burst = true;
       do { renderPT(4); } while (count < S.target);
@@ -1068,10 +1282,13 @@ void main() {
         else if (dt < 20 && spp < 6) spp++;
       }
     }
+    if (cacheWanted() && (work || probesChanged || gatherDirty)) { gatherCache(); gatherDirty = false; }
+    work = work || probesChanged;
     display();
     if (work && (S.unlock || (burst && S.fpsFull))) trackBurst(tb, burst && S.fpsFull);
     if (tick % 6 === 0) {
       hSpp.textContent = count;
+      hProbe.textContent = cacheWanted() ? (probe.n >= PROBE_MAX ? probe.n + ' ✓' : probe.n) : 'выкл';
       if (S.fpsFull) {
         if (!S.full) { hFps.textContent = '—'; hFpsL.textContent = 'включите «Полный кадр сразу»'; hFpsWrap.style.opacity = '1'; }
         else if (msAvg > 0) {
