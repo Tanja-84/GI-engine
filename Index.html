@@ -1,5 +1,5 @@
 <!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
-<title>Пиксельный GI-движок v10</title>
+<title>Пиксельный GI-движок v11</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Pixelify+Sans:wght@500;600&display=swap" rel="stylesheet">
@@ -66,6 +66,7 @@ button { font: 500 12px var(--font-mono); letter-spacing: .04em; padding: 8px 12
 button:hover { border-color: var(--accent); color: var(--accent); }
 .note { font-size: 12px; color: var(--muted); margin: 0; }
 .note kbd { font: 500 11px var(--font-mono); border: 1px solid var(--line); padding: 0 4px; }
+.tim { font: 500 11px/1.5 var(--font-mono); color: var(--fg); margin: 0; font-variant-numeric: tabular-nums; white-space: pre-line; }
 @media (max-width: 820px) {
   html, body { height: auto; }
   .app { grid-template-columns: minmax(0, 1fr); height: auto; }
@@ -78,8 +79,8 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 <main class="app">
   <section class="stage" id="stage" aria-label="Окно рендера">
     <div class="frame" id="frame">
-      <canvas id="view" width="100" height="160" aria-label="Сцена с глиняными кувшинами, посчитанная трассировкой путей"></canvas>
-      <div class="hud" id="hud"><span>сэмплов <b id="hSpp">0</b></span><span>кэш <b id="hProbe">0</b></span><span id="hRes">—</span><span id="hFpsWrap"><b id="hFps">—</b> <span id="hFpsL">полн. пересчёт</span></span></div>
+      <canvas id="view" width="100" height="160" aria-label="Сцена с глиняными кувшинами, освещённая воксельным GI или трассировкой путей"></canvas>
+      <div class="hud" id="hud"><span>сэмплов <b id="hSpp">0</b></span><span>воксели <b id="hProbe">—</b></span><span id="hRes">—</span><span id="hFpsWrap"><b id="hFps">—</b> <span id="hFpsL">полн. пересчёт</span></span></div>
     </div>
     <div class="err" id="err" hidden></div>
   </section>
@@ -87,7 +88,7 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   <aside class="panel">
     <header>
       <h1>Пиксельный GI-движок</h1>
-      <p class="lede">Честная трассировка путей в WebGL2: свет отражается от кирпича, дерева и глины и подкрашивает соседние поверхности. Результат считается в малом разрешении и показывается крупными пикселями.</p>
+      <p class="lede">Свет отражается от кирпича, дерева и глины и подкрашивает соседние поверхности. Два режима: воксельный GI по статье «Dynamic Voxel-Based Global Illumination» (CGF 2025) и честная трассировка путей. Кадр считается в малом разрешении и показывается крупными пикселями.</p>
     </header>
 
     <fieldset>
@@ -107,13 +108,42 @@ button:hover { border-color: var(--accent); color: var(--accent); }
     </fieldset>
 
     <fieldset>
+      <legend>Воксельный GI</legend>
+      <label class="sw"><span>Кадр из вокселей вместо трассировки путей</span><input id="vox" data-k="vox" type="checkbox" checked></label>
+      <div class="row"><label for="vres">Вокселей по ширине комнаты</label><output id="o_vres"></output>
+        <input id="vres" data-k="vres" type="range" min="32" max="96" step="16" value="64"></div>
+      <div class="row"><label for="vrays">Лучей на грань вокселя</label><output id="o_vrays"></output>
+        <input id="vrays" data-k="vrays" type="range" min="32" max="256" step="32" value="128"></div>
+      <label class="sw"><span>Сглаживание 3³ с учётом нормалей</span><input id="vfilt" data-k="vfilt" type="checkbox" checked></label>
+      <label class="sw"><span>Досчитывать лучи, пока свет стоит</span><input id="vref" data-k="vref" type="checkbox" checked></label>
+      <div class="row"><label for="vao">Ближние отражения и тени</label><output id="o_vao"></output>
+        <input id="vao" data-k="vao" type="range" min="0" max="1" step="0.05" value="1"></div>
+      <div class="row"><label for="vspp">Сэмплов на кадр (воксели)</label><output id="o_vspp"></output>
+        <input id="vspp" data-k="vspp" type="range" min="4" max="32" step="4" value="8"></div>
+      <label class="sw"><span>Показать воксели</span><input id="vdbg" data-k="vdbg" type="checkbox"></label>
+      <p class="note">Комната разбита на воксели. С каждой грани вокселя, на которой есть поверхность, один раз выпускаются лучи, и для каждого запоминается, в какой воксель он попал. Это кэш видимости из статьи. При смене солнца лучи больше не трассируются: сначала считается прямой свет на гранях («освещённые воксели»), затем отскоки собираются по готовому кэшу, по проходу на отскок.</p>
+      <p class="note">Кадру остаётся выпустить луч из камеры и теневые лучи для точных теней. Отражённый свет он берёт из трёх граней соседних вокселей, поэтому шума в нём нет с первого кадра. Пока свет двигают, отскоки считаются по половине лучей и сглаживаются во времени. Когда свет отпустили, всё пересчитывается полностью, а потом, пока свет стоит, добавляются новые пачки лучей.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Шар</legend>
+      <label class="sw"><span>Показывать шар</span><input id="ball" data-k="ball" type="checkbox" checked></label>
+      <label class="sw"><span>Камера следит за шаром</span><input id="bfollow" data-k="bfollow" type="checkbox" checked></label>
+      <div class="row"><label for="bspeed">Скорость анимации</label><output id="o_bspeed"></output>
+        <input id="bspeed" data-k="bspeed" type="range" min="0.25" max="2" step="0.25" value="1"></div>
+      <div class="btns"><button id="ballGo" type="button">Запустить шар заново</button></div>
+      <p class="note">Шар диаметром 20 см скатывается с верхней полки, падает на нижнюю, оттуда на пол, катится к стене под окном, ударяется и, немного откатившись, замирает. Траектория посчитана простой физикой: качение, отскоки, сопротивление качению.</p>
+      <p class="note">Свет обновляется так, как в статье для движущихся объектов. Лучи неподвижных граней по-прежнему берутся из кэша, а заново проверяется только шар: если он ближе кэшированного попадания, луч берёт свет шара. У шара свой набор освещённости, поэтому свет между ним и неподвижными предметами не протекает. Прямой свет на гранях пересчитывается, чтобы в отражённом свете была и тень шара.</p>
+    </fieldset>
+
+    <fieldset>
       <legend>Пикселизация</legend>
       <div class="row"><label for="rows">Строк по высоте</label><output id="o_rows"></output>
-        <input id="rows" data-k="rows" type="range" min="96" max="360" step="8" value="232"></div>
+        <input id="rows" data-k="rows" type="range" min="96" max="1080" step="8" value="232"></div>
       <div class="row"><label for="levels">Уровней цвета</label><output id="o_levels"></output>
         <input id="levels" data-k="levels" type="range" min="6" max="64" step="1" value="40"></div>
       <label class="sw"><span>Полный кадр сразу</span><input id="full" data-k="full" type="checkbox" checked></label>
-      <div class="row"><label for="target">Сэмплов на кадр</label><output id="o_target"></output>
+      <div class="row"><label for="target">Сэмплов на кадр (трассировка)</label><output id="o_target"></output>
         <input id="target" data-k="target" type="range" min="8" max="256" step="8" value="64"></div>
       <p class="note">Движение без шума: при каждом сдвиге кадр досчитывается целиком, а потом показывается. Если картинка начала подтормаживать, уменьшите число сэмплов.</p>
       <label class="sw"><span>Грани на кувшинах</span><input id="facets" data-k="facets" type="checkbox" checked></label>
@@ -121,7 +151,7 @@ button:hover { border-color: var(--accent); color: var(--accent); }
     </fieldset>
 
     <fieldset>
-      <legend>Кэш непрямого света</legend>
+      <legend>Трассировка путей + кэш</legend>
       <label class="sw"><span>Мягкий свет из кэша сразу</span><input id="prior" data-k="prior" type="checkbox" checked></label>
       <div class="row"><label for="priorK">Сэмплов до точного света</label><output id="o_priorK"></output>
         <input id="priorK" data-k="priorK" type="range" min="1" max="128" step="1" value="8"></div>
@@ -129,13 +159,12 @@ button:hover { border-color: var(--accent); color: var(--accent); }
         <input id="priorAmt" data-k="priorAmt" type="range" min="0" max="2" step="0.05" value="1"></div>
       <label class="sw"><span>Отскоки после первого брать из кэша</span><input id="fg" data-k="fg" type="checkbox" checked></label>
       <label class="sw"><span>Показать только кэш</span><input id="cacheOnly" data-k="cacheOnly" type="checkbox"></label>
-      <p class="note">По всей комнате расставлено около 23 тысяч невидимых проб. Каждая за пару секунд собирает, какой отражённый свет приходит в её точку с разных сторон. Пробы не зависят от камеры, поэтому при повороте и приближении мягкий свет от кирпича и глины виден в первом же кадре, а не проявляется постепенно. Пересчитываются они только при смене света, отскоков или граней. Число в углу кадра показывает, сколько путей уже собрала каждая проба.</p>
-      <p class="note">Первый переключатель показывает кэш, пока честный расчёт копит сэмплы, и плавно отдаёт ему место: конечная картинка от этого не меняется. Второй делает каждый сэмпл короче: после первого отражения путь не идёт дальше, а берёт остаток света из кэша. Шума и работы заметно меньше, но картинка становится слегка приближённой.</p>
+      <p class="note">Работает, когда воксельный режим выключен. Кэшем служат те же грани вокселей. Первый переключатель показывает кэш, пока честный расчёт копит сэмплы, и плавно уступает ему место. Второй обрывает путь после первого отражения и берёт остаток света из вокселей: шума и работы меньше, картинка слегка приближённая.</p>
     </fieldset>
 
     <fieldset>
       <legend>Шумодав</legend>
-      <label class="sw"><span>Сглаживать шум света</span><input id="dn" data-k="dn" type="checkbox" checked></label>
+      <label class="sw"><span>Сглаживать шум света</span><input id="dn" data-k="dn" type="checkbox"></label>
       <div class="row"><label for="dnPhi">Сила</label><output id="o_dnPhi"></output>
         <input id="dnPhi" data-k="dnPhi" type="range" min="0.5" max="8" step="0.5" value="3"></div>
       <p class="note">Фильтр смотрит на нормали, глубину и яркость, поэтому края предметов и границы теней остаются резкими, а текстура кирпича и дерева не размывается. С ростом числа сэмплов он слабеет сам.</p>
@@ -146,14 +175,15 @@ button:hover { border-color: var(--accent); color: var(--accent); }
       <label class="sw"><span>FPS только по полному пересчёту</span><input id="fpsFull" data-k="fpsFull" type="checkbox" checked></label>
       <label class="sw"><span>Снять лимит 60 кадр/с</span><input id="unlock" data-k="unlock" type="checkbox" checked></label>
       <label class="sw"><span>Качать камеру сама (для замера)</span><input id="sway" data-k="sway" type="checkbox"></label>
-      <p class="note">Без лимита следующий кадр запускается сразу, как видеокарта закончила предыдущий, а не раз за обновление монитора. Браузер при этом всё равно показывает картинку с частотой монитора: это из страницы не отключить. Реальную скорость расчёта показывает счётчик. Автопокачивание заставляет каждый кадр считаться заново, так что замер идёт без вашей руки.</p>
-      <p class="note">Счётчик в углу кадра считает только кадры, где свет пересчитывается целиком, то есть в режиме «Полный кадр сразу». Время берётся до момента, когда видеокарта реально закончила работу. Пока камера стоит, показано последнее значение. Выключите, чтобы видеть обычную частоту кадров.</p>
+      <p class="tim" id="tim">—</p>
+      <p class="note">Время каждого этапа измеряется на видеокарте, если браузер даёт таймеры (EXT_disjoint_timer_query). Без них показано только время построения вокселей и общий счётчик кадров.</p>
+      <p class="note">Без лимита следующий кадр запускается сразу, как видеокарта закончила предыдущий. Браузер всё равно показывает картинку с частотой монитора. Счётчик в углу считает только кадры, где свет пересчитывается целиком, то есть в режиме «Полный кадр сразу».</p>
     </fieldset>
 
     <fieldset>
       <legend>Камера</legend>
       <p class="note">Тяните по кадру, чтобы осмотреться. Колесо или щипок меняют расстояние.</p>
-      <div class="btns"><button id="resetCam" type="button">Вернуть кадр</button><button id="resetAcc" type="button">Пересчитать</button></div>
+      <div class="btns"><button id="resetCam" type="button">Вернуть кадр</button><button id="resetAcc" type="button">Пересчитать</button><button id="rebuild" type="button">Перестроить воксели</button></div>
     </fieldset>
   </aside>
 </main>
@@ -171,6 +201,9 @@ void main() {
 precision highp float;
 precision highp int;
 precision highp sampler2D;
+precision highp isampler2D;
+precision highp isampler3D;
+precision highp usampler2D;
 
 uniform vec2 uRes;
 uniform sampler2D uPrev;
@@ -183,27 +216,48 @@ uniform vec3 uSunDir;
 uniform float uSunI, uSkyI;
 uniform int uBounces;
 uniform float uFacet, uAA;
-uniform int uDebug;
 uniform int uDirN;
 uniform float uDirBase;
 uniform sampler2D uPrevD;
-// кэш непрямого света: сетка проб, в каждой SH первого порядка
-uniform sampler2D uP0, uP1, uP2, uP3;
-uniform int uFG;        // 1 = отскоки после первого берутся из кэша
-uniform int uProbeB;    // сколько отскоков учитывает проба
-uniform float uPN;      // сэмплов уже накоплено в пробах
-uniform int uPS;        // сэмплов на пробу за этот проход
+uniform int uFG;        // 1 = отскоки после первого берутся из воксельного кэша
 uniform sampler2D uGb;  // G-буфер для прохода сбора
-#if PASS == 0
+uniform float uAO;      // сила контактных теней в воксельном режиме
+uniform int uVoxDbg;    // 1 = показать воксели как есть
+
+// воксельный кэш
+uniform ivec3 uVN;      // размер сетки
+uniform vec3 uVS;       // размер вокселя
+uniform int uVoxOK;     // 1 = кэш построен и освещён
+uniform int uTC;        // срезов по горизонтали в атласе вокселизации
+uniform int uRays, uVisW, uNF;
+uniform int uBatch, uStride, uPhase, uLitN, uFilt, uRefInit;
+uniform float uEma, uFiltK;
+uniform highp isampler3D uVIdx;   // сетка: номер вокселя + 1, 0 = пусто
+uniform highp isampler2D uVC;     // номер вокселя -> линейные координаты в сетке
+uniform highp isampler2D uSK;     // слот (воксель·6 + грань) -> номер грани с лучами, -1 = пусто
+uniform highp isampler2D uFS;     // номер грани -> слот
+uniform highp usampler2D uVis;    // кэш видимости: воксель попадания + нормаль, по лучу
+uniform sampler2D uSP, uSN, uSA;  // точка, нормаль и цвет поверхности грани
+uniform sampler2D uSD, uSL, uSI, uSF, uACC;
+// шар: центр и радиус (радиус 0 = шара нет), поворот, его собственный набор облучённости
+uniform vec4 uBall;
+uniform mat3 uBallM;
+uniform sampler2D uBP;    // 8×8 направлений (октаэдр): слева непрямой свет, справа уходящий свет
+
+#if PASS == 0 || PASS == 10
 layout(location = 0) out vec4 outC;
 layout(location = 1) out vec4 outG;
 layout(location = 2) out vec4 outA;
 layout(location = 3) out vec4 outD;
-#elif PASS == 1
-layout(location = 0) out vec4 outP0;
-layout(location = 1) out vec4 outP1;
-layout(location = 2) out vec4 outP2;
-layout(location = 3) out vec4 outP3;
+#elif PASS == 4 || PASS == 6
+layout(location = 0) out vec4 out0;
+layout(location = 1) out vec4 out1;
+layout(location = 2) out vec4 out2;
+#elif PASS == 7
+layout(location = 0) out vec4 out0;
+layout(location = 1) out vec4 out1;
+#elif PASS == 5
+layout(location = 0) out highp uvec2 outV;
 #else
 out vec4 outX;
 #endif
@@ -223,8 +277,7 @@ const vec3 BMAX = vec3(1.5, 2.75, -0.98);
 // ---------- random ----------
 uint s0;
 vec3 gN, gAlb, gDir;
-float gT, gPrior, gSidx, gDidx;
-bool gDoPrior;
+float gT, gSidx, gDidx;
 vec2 gRot0, gRot1, gRot2;
 uint pcg(uint v) { uint st = v * 747796405u + 2891336053u; uint w = ((st >> ((st >> 28u) + 4u)) ^ st) * 277803737u; return (w >> 22u) ^ w; }
 float rnd() { s0 = pcg(s0); return float(s0) * (1.0 / 4294967296.0); }
@@ -243,6 +296,51 @@ vec2 ldsAt(int k, int j) {
   return fract(r + (gDidx + float(j)) * a);
 }
 float h31(vec3 p) { uvec3 q = uvec3(ivec3(floor(p)) + 32768); return float(pcg(q.x + pcg(q.y + pcg(q.z)))) * (1.0 / 4294967296.0); }
+vec3 cosDir(vec3 n, vec2 uu) {
+  float r1 = uu.x, r2 = uu.y, phi = 2.0 * PI * r1, sr = sqrt(r2);
+  vec3 t = normalize(cross(abs(n.y) > 0.99 ? vec3(1, 0, 0) : vec3(0, 1, 0), n));
+  vec3 b = cross(n, t);
+  return normalize(t * cos(phi) * sr + b * sin(phi) * sr + n * sqrt(1.0 - r2));
+}
+// Шар: пересечение (r = 0 — шара нет). Изнутри шара луч упирается в его стенку.
+float hitBall(vec3 ro, vec3 rd, float tmax) {
+  if (uBall.w <= 0.0) return -1.0;
+  vec3 oc = ro - uBall.xyz;
+  float b = dot(oc, rd), h = b * b - dot(oc, oc) + uBall.w * uBall.w;
+  if (h < 0.0) return -1.0;
+  h = sqrt(h);
+  float t = -b - h;
+  if (t < 0.0004) t = -b + h;
+  return (t < 0.0004 || t > tmax) ? -1.0 : t;
+}
+bool onBall(vec3 p) { return uBall.w > 0.0 && distance(p, uBall.xyz) < uBall.w + 0.012; }
+// октаэдр без квантования: для набора направлений шара
+vec2 octF(vec3 n) {
+  n /= abs(n.x) + abs(n.y) + abs(n.z);
+  return n.y >= 0.0 ? n.xz : (1.0 - abs(n.zx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.z >= 0.0 ? 1.0 : -1.0);
+}
+vec3 octFInv(vec2 e) {
+  vec3 n = vec3(e.x, 1.0 - abs(e.x) - abs(e.y), e.y);
+  if (n.y < 0.0) n.xz = (1.0 - abs(n.zx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.z >= 0.0 ? 1.0 : -1.0);
+  return normalize(n);
+}
+// Свет шара в направлении нормали n: билинейно по 8×8 направлениям. side 0 = непрямой свет
+// (для пикселей шара), side 1 = уходящий свет (для лучей, попавших в шар).
+vec3 ballProbe(vec3 n, int side) {
+  vec2 uv = clamp((octF(n) * 0.5 + 0.5) * 8.0 - 0.5, vec2(0.0), vec2(7.0));
+  ivec2 b = ivec2(floor(uv)), b1 = min(b + 1, ivec2(7));
+  vec2 f = uv - vec2(b);
+  int ox = side * 8;
+  vec3 c00 = texelFetch(uBP, ivec2(b.x + ox, b.y), 0).rgb, c10 = texelFetch(uBP, ivec2(b1.x + ox, b.y), 0).rgb;
+  vec3 c01 = texelFetch(uBP, ivec2(b.x + ox, b1.y), 0).rgb, c11 = texelFetch(uBP, ivec2(b1.x + ox, b1.y), 0).rgb;
+  return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+void seedRot(uint hh) {
+  uint h2 = pcg(hh), h3 = pcg(h2), h4 = pcg(h3), h5 = pcg(h4), h6 = pcg(h5);
+  gRot0 = vec2(float(hh), float(h2)) * (1.0 / 4294967296.0);
+  gRot1 = vec2(float(h3), float(h4)) * (1.0 / 4294967296.0);
+  gRot2 = vec2(float(h5), float(h6)) * (1.0 / 4294967296.0);
+}
 
 // ---------- кувшины: тела вращения (кольца-конусы, считаются аналитически) ----------
 const int NV = 7;
@@ -269,6 +367,10 @@ const vec3 WH[NB] = vec3[NB](
   vec3(0.090, 1.300, 0.040), vec3(0.040, 1.300, 0.040), vec3(0.040, 1.300, 0.040), vec3(0.040, 1.300, 0.040),
   vec3(0.065, 0.285, 0.060), vec3(0.040, 0.285, 0.040), vec3(0.040, 0.285, 0.040), vec3(0.040, 0.285, 0.040));
 const float WID[NB] = float[NB](2.0, 3.0, 3.0, 3.0, 3.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0);
+
+// Проходы сбора, отскока и фильтра работают только с кэшем: геометрию сцены им не компилируем.
+#define SCENE (PASS != 2 && PASS != 7 && PASS != 8)
+#if SCENE
 
 vec3 safeInv(vec3 d) { return 1.0 / (d + vec3(1e-7) * (step(0.0, d) * 2.0 - 1.0)); }
 
@@ -388,10 +490,19 @@ float hitVase(int i, vec3 ro, vec3 rd, vec3 inv, float tmax, out vec3 n) {
 // Ближайшее пересечение с предметами. anyHit = true: достаточно любого (для теней).
 float sceneIntersect(vec3 ro, vec3 rd, float tmax, bool anyHit, out float oid, out vec3 on) {
   oid = 0.0; on = vec3(0.0, 1.0, 0.0);
+  float tb = hitBall(ro, rd, tmax);
+  bool hit = tb > 0.0;
+  if (hit) {
+    oid = 30.0; on = normalize(ro + rd * tb - uBall.xyz);
+    if (dot(on, rd) > 0.0) on = -on;   // луч изнутри шара
+    if (anyHit) return tb;
+    tmax = tb;
+  }
   vec2 bb = aabb(ro, rd);
   float best = min(bb.y, tmax);
-  if (best <= max(bb.x, 0.0)) return -1.0;
-  bool hit = false;
+  if (best <= max(bb.x, 0.0)) return hit ? tmax : -1.0;
+  bool hitB = hit;
+  hit = false;
   vec3 inv = safeInv(rd);
   for (int i = 0; i < NB; i++) {
     vec3 c = WC[i], h = WH[i];
@@ -415,7 +526,7 @@ float sceneIntersect(vec3 ro, vec3 rd, float tmax, bool anyHit, out float oid, o
       if (anyHit) return best;
     }
   }
-  return hit ? best : -1.0;
+  return hit ? best : (hitB ? tmax : -1.0);
 }
 
 // ---------- окно ----------
@@ -483,7 +594,14 @@ vec3 wallAlbedo(vec3 p, int wid) {
 // ---------- объекты ----------
 void shadeObject(vec3 p, float id, vec3 ngIn, out vec3 n, out vec3 ng, out vec3 alb) {
   ng = ngIn; n = ng;
-  if (id >= 9.5) {
+  if (id > 29.5) {
+    // шар: полосатая глазурь, рисунок крутится вместе с ним
+    vec3 l = normalize((p - uBall.xyz) * uBallM);
+    float seg = floor((atan(l.z, l.x) / (2.0 * PI) + 0.5) * 6.0);
+    bool cap = abs(l.y) > 0.8;
+    alb = cap ? vec3(0.86, 0.80, 0.66) : (mod(seg, 2.0) < 0.5 ? vec3(0.07, 0.42, 0.52) : vec3(0.86, 0.80, 0.66));
+    alb *= 0.94 + 0.10 * h31(floor(l * 14.0) + 50.0);
+  } else if (id >= 9.5) {
     int i = int(id - 9.5);
     vec3 q = p - VP[i];
     float H = VA[i].x;
@@ -544,116 +662,227 @@ vec3 sampleSun(vec2 uu) {
   return normalize(u * cos(ph) * sinT + v * sin(ph) * sinT + w * cosT);
 }
 
+// Солнце и окно проверяются одним теневым лучом в цикле из двух шагов: пересечение со
+// сценой попадает в шейдер один раз (компилятор D3D встраивает каждую копию целиком).
 vec3 directE(vec3 p, vec3 n, vec2 uS, vec2 uW) {
   vec3 E = vec3(0.0);
-  if (uSunI > 0.0) {
-    vec3 Ls = sampleSun(uS);
-    float c = dot(n, Ls);
-    if (c > 0.0 && Ls.x > 0.02) {
-      float t = (XMAX - p.x) / Ls.x;
-      vec3 q = p + Ls * t;
-      if (inWindow(q.y, q.z) && !occluded(p, Ls, t)) E += SUNCOL * uSunI * c;
-    }
-  }
-  if (uSkyI > 0.0) {
-    vec3 q = vec3(XMAX, mix(WY.x, WY.y, uW.x), mix(WZ.x, WZ.y, uW.y));
-    if (inWindow(q.y, q.z)) {
+  for (int k = 0; k < 2; k++) {
+    vec3 L = vec3(0.0), dir = vec3(1.0, 0.0, 0.0);
+    float tmax = 0.0;
+    if (k == 0) {
+      if (uSunI <= 0.0) continue;
+      dir = sampleSun(uS);
+      float c = dot(n, dir);
+      if (c <= 0.0 || dir.x <= 0.02) continue;
+      tmax = (XMAX - p.x) / dir.x;
+      vec3 q = p + dir * tmax;
+      if (!inWindow(q.y, q.z)) continue;
+      L = SUNCOL * uSunI * c;
+    } else {
+      if (uSkyI <= 0.0) continue;
+      vec3 q = vec3(XMAX, mix(WY.x, WY.y, uW.x), mix(WZ.x, WZ.y, uW.y));
+      if (!inWindow(q.y, q.z)) continue;
       vec3 d = q - p; float d2 = dot(d, d), dl = sqrt(d2);
-      vec3 Lv = d / dl;
-      float cs = dot(n, Lv), cw = Lv.x;
-      if (cs > 0.0 && cw > 0.0 && !occluded(p, Lv, dl - 0.02)) E += SKYCOL * uSkyI * cs * cw * WAREA / d2;
+      dir = d / dl;
+      float cs = dot(n, dir), cw = dir.x;
+      if (cs <= 0.0 || cw <= 0.0) continue;
+      tmax = dl - 0.02;
+      L = SKYCOL * uSkyI * cs * cw * WAREA / d2;
     }
+    if (!occluded(p, dir, tmax)) E += L;
   }
   return E;
 }
 
-vec3 cosDir(vec3 n, vec2 uu) {
-  float r1 = uu.x, r2 = uu.y, phi = 2.0 * PI * r1, sr = sqrt(r2);
-  vec3 t = normalize(cross(abs(n.y) > 0.99 ? vec3(1, 0, 0) : vec3(0, 1, 0), n));
-  vec3 b = cross(n, t);
-  return normalize(t * cos(phi) * sr + b * sin(phi) * sr + n * sqrt(1.0 - r2));
-}
 
-// ---------- кэш непрямого света ----------
-// Сетка проб по всей комнате (не зависит от камеры). Проба хранит падающий на неё
-// отражённый свет в виде сферических гармоник 1-го порядка: из неё можно взять
-// «мягкий свет» для поверхности с любой нормалью. Прямой свет в кэш не входит.
-const ivec3 GN = ivec3(32, 24, 30);
-const vec3 GMIN = vec3(XMIN, 0.0, ZMIN);
-const vec3 GSTEP = vec3((XMAX - XMIN) / 32.0, YMAX / 24.0, (ZMAX - ZMIN) / 30.0);
-vec3 probePos(ivec3 c) { return GMIN + (vec3(c) + 0.5) * GSTEP; }
-ivec2 probeTexel(ivec3 c) { return ivec2(c.x + c.z * GN.x, c.y); }
-
-// Проба внутри предмета (доска, ножка, тело кувшина) ничего полезного не видит: выключаем её.
-bool insideSolid(vec3 p) {
+// Точка внутри предмета (доски, ножки, тела кувшина) с запасом m.
+bool insideSolid(vec3 p, float m) {
   for (int i = 0; i < NB; i++) {
-    if (all(lessThan(abs(p - WC[i]), WH[i] + 0.012))) return true;
+    if (all(lessThan(abs(p - WC[i]), WH[i] + m))) return true;
   }
   for (int i = 0; i < NV; i++) {
     vec3 q = p - VP[i];
     float H = VA[i].x;
-    if (q.y > -0.012 && q.y < H + 0.012) {
+    if (q.y > -m && q.y < H + m) {
       float hr = H / 14.0;
       float fy = clamp(q.y / hr, 0.0, 13.999);
       int j = int(fy);
       float r = mix(VRT[i * 15 + j], VRT[i * 15 + j + 1], fy - float(j));
-      if (length(q.xz) < r + 0.012) return true;
+      if (length(q.xz) < r + m) return true;
     }
   }
   return false;
 }
+#endif
 
-// SH1 -> «освещённость / π» для нормали n (то же, что яркость белой стены с этой нормалью).
-vec3 shEval(ivec2 tc, vec3 n) {
-  vec3 c0 = texelFetch(uP0, tc, 0).rgb;
-  vec3 cx = texelFetch(uP1, tc, 0).rgb, cy = texelFetch(uP2, tc, 0).rgb, cz = texelFetch(uP3, tc, 0).rgb;
-  return max(0.282095 * c0 + 0.325735 * (cx * n.x + cy * n.y + cz * n.z), vec3(0.0));
+// ---------- воксельный кэш (по статье «Dynamic Voxel-Based Global Illumination») ----------
+// Комната разбита на воксели. Занятый воксель хранит 6 «слотов», по слоту на грань
+// (+x, -x, +y, -y, +z, -z). Слот грани, на которой есть поверхность, хранит её среднюю
+// точку, нормаль и цвет, прямой свет D, непрямой свет I и уходящий свет alb·(D + I).
+// Всё в единицах «освещённость / π», как и раньше в кэше проб.
+const int SLOTW = 1536;   // слотов в строке текстуры: 256 вокселей × 6 граней
+const int FSW = 1024;     // ширина таблицы «номер грани -> слот»
+const int VCW = 256;      // ширина таблицы координат вокселей
+const uint MISS = 0xFFFFFFFFu;
+const int BALLV = 0xFFFFE;   // «номер вокселя» для попадания в шар
+const vec3 BALL_ALB = vec3(0.44, 0.58, 0.58);   // средний цвет полосатого шара
+const vec3 VMIN = vec3(XMIN, 0.0, ZMIN);
+const vec3 VMAX = vec3(XMAX, YMAX, ZMAX);
+
+float vsAvg() { return (uVS.x + uVS.y + uVS.z) * (1.0 / 3.0); }
+vec3 ambientA() { return SKYCOL * uSkyI * 0.035; }
+ivec2 slotTC(int s) { return ivec2(s % SLOTW, s / SLOTW); }
+int voxAt(ivec3 c) {
+  if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, uVN))) return -1;
+  return texelFetch(uVIdx, c, 0).r - 1;
 }
-
-// Трилинейная смесь 8 соседних проб. Пробы за спиной у поверхности и пробы,
-// закрытые предметами (vis = true: проверка теневым лучом), почти не учитываются,
-// поэтому свет не протекает сквозь полки и стенки кувшинов.
-vec3 cacheX(vec3 p, vec3 n, bool vis) {
-  vec3 g = clamp((p - GMIN) / GSTEP - 0.5, vec3(0.0), vec3(GN) - 1.001);
+ivec3 voxCoord(int vi) {
+  int l = texelFetch(uVC, ivec2(vi % VCW, vi / VCW), 0).r;
+  return ivec3(l % uVN.x, (l / uVN.x) % uVN.y, l / (uVN.x * uVN.y));
+}
+vec3 faceDir(int f) {
+  float s = (f & 1) == 0 ? 1.0 : -1.0;
+  int a = f >> 1;
+  return a == 0 ? vec3(s, 0.0, 0.0) : (a == 1 ? vec3(0.0, s, 0.0) : vec3(0.0, 0.0, s));
+}
+// нормаль попадания в 12 битах (октаэдр, ось y вверх)
+uint octEnc(vec3 n) {
+  n /= abs(n.x) + abs(n.y) + abs(n.z);
+  vec2 e = n.y >= 0.0 ? n.xz : (1.0 - abs(n.zx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.z >= 0.0 ? 1.0 : -1.0);
+  uvec2 q = uvec2(clamp(floor((e * 0.5 + 0.5) * 63.0 + 0.5), 0.0, 63.0));
+  return q.x | (q.y << 6u);
+}
+vec3 octDec(uint c) {
+  vec2 e = vec2(float(c & 63u), float((c >> 6u) & 63u)) * (2.0 / 63.0) - 1.0;
+  vec3 n = vec3(e.x, 1.0 - abs(e.x) - abs(e.y), e.y);
+  if (n.y < 0.0) n.xz = (1.0 - abs(n.zx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.z >= 0.0 ? 1.0 : -1.0);
+  return normalize(n);
+}
+// Значение для поверхности с нормалью n внутри вокселя vi: три грани с весами n²
+// (как в основном проходе статьи). Альфа слота = 1, если грань занята.
+vec3 slotLookup(sampler2D tex, int vi, vec3 n) {
+  int b = vi * 6;
+  vec3 w = n * n;
+  vec3 s = vec3(0.0);
+  float ws = 0.0;
+  if (w.x > 0.01) { vec4 e = texelFetch(tex, slotTC(b + (n.x >= 0.0 ? 0 : 1)), 0); s += e.rgb * (w.x * e.a); ws += w.x * e.a; }
+  if (w.y > 0.01) { vec4 e = texelFetch(tex, slotTC(b + (n.y >= 0.0 ? 2 : 3)), 0); s += e.rgb * (w.y * e.a); ws += w.y * e.a; }
+  if (w.z > 0.01) { vec4 e = texelFetch(tex, slotTC(b + (n.z >= 0.0 ? 4 : 5)), 0); s += e.rgb * (w.z * e.a); ws += w.z * e.a; }
+  if (ws > 0.05) return s / ws;
+  // у вокселя нет грани нужного направления: берём остальные, повёрнутые к n
+  for (int f = 0; f < 6; f++) {
+    vec4 e = texelFetch(tex, slotTC(b + f), 0);
+    float wf = e.a * (max(dot(faceDir(f), n), 0.0) + 0.1);
+    s += e.rgb * wf; ws += wf;
+  }
+  return ws > 0.0 ? s / ws : vec3(0.0);
+}
+// Воксель, в который попал луч. Если вокселизация его не отметила (тонкий край),
+// ищем занятого соседа.
+int findVox(vec3 p, vec3 ng) {
+  ivec3 c = clamp(ivec3(floor((p - VMIN) / uVS)), ivec3(0), uVN - 1);
+  int vi = voxAt(c);
+  if (vi >= 0) return vi;
+  ivec3 c2 = clamp(ivec3(floor((p - ng * (0.3 * uVS) - VMIN) / uVS)), ivec3(0), uVN - 1);
+  vi = voxAt(c2);
+  if (vi >= 0) return vi;
+  for (int i = 0; i < 27; i++) {
+    vi = voxAt(c + ivec3(i % 3, (i / 3) % 3, i / 9) - 1);
+    if (vi >= 0) return vi;
+  }
+  return -1;
+}
+// Непрямой свет «освещённость / π» в точке p с нормалью n: трилинейная смесь
+// 8 соседних вокселей по 3 граням. Пустые воксели и грани не учитываются, а веса
+// нормируются: это заменяет «padding» из статьи. Грани, чья поверхность далеко от
+// касательной плоскости точки (крышка ящика над полом), почти не учитываются.
+vec3 voxI(vec3 p, vec3 n) {
+  if (uVoxOK == 0) return ambientA();
+  vec3 g = (p - VMIN) / uVS - 0.5;
   ivec3 b = ivec3(floor(g));
   vec3 f = g - vec3(b);
+  vec3 wn = n * n;
+  int fx = n.x >= 0.0 ? 0 : 1, fy = n.y >= 0.0 ? 2 : 3, fz = n.z >= 0.0 ? 4 : 5;
+  float iv = 1.0 / vsAvg();
   vec3 acc = vec3(0.0);
   float ws = 0.0;
   for (int i = 0; i < 8; i++) {
     ivec3 o = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
-    ivec3 c = min(b + o, GN - 1);
-    ivec2 tc = probeTexel(c);
-    if (texelFetch(uP0, tc, 0).a < 0.5) continue;
+    int vi = voxAt(b + o);
+    if (vi < 0) continue;
     vec3 tri = mix(1.0 - f, f, vec3(o));
-    float w = tri.x * tri.y * tri.z + 1e-4;
-    vec3 d = probePos(c) - p;
-    float dl = max(length(d), 1e-4);
-    vec3 dn = d / dl;
-    float wb = (dot(dn, n) + 1.0) * 0.5;
-    w *= wb * wb + 0.02;
-    if (vis && occluded(p, dn, dl)) w *= 1e-4;
-    acc += shEval(tc, n) * w;
-    ws += w;
+    float wt = tri.x * tri.y * tri.z + 1e-3;
+    for (int k = 0; k < 3; k++) {
+      float wf = k == 0 ? wn.x : (k == 1 ? wn.y : wn.z);
+      if (wf < 0.004) continue;
+      ivec2 tc = slotTC(vi * 6 + (k == 0 ? fx : (k == 1 ? fy : fz)));
+      vec4 I = texelFetch(uSF, tc, 0);
+      if (I.a < 0.5) continue;
+      float d = dot(texelFetch(uSP, tc, 0).xyz - p, n) * iv;
+      float w = wt * wf * (exp(-5.0 * d * d) + 0.003);
+      acc += I.rgb * w;
+      ws += w;
+    }
   }
-  if (ws > 0.0) return acc / ws;
-  // Все 8 соседей внутри предметов (узкая щель между кувшинами, угол у полки):
-  // ищем ближайшие рабочие пробы в кубе 4×4×4 вокруг точки.
-  for (int i = 0; i < 64; i++) {
-    ivec3 c = clamp(b + ivec3(i & 3, (i >> 2) & 3, (i >> 4) & 3) - 1, ivec3(0), GN - 1);
-    ivec2 tc = probeTexel(c);
-    if (texelFetch(uP0, tc, 0).a < 0.5) continue;
-    vec3 d = probePos(c) - p;
-    float d2 = max(dot(d, d), 1e-4);
-    float wb = (dot(d, n) * inversesqrt(d2) + 1.0) * 0.5;
-    float w = (wb * wb + 0.02) / (d2 * d2);
-    acc += shEval(tc, n) * w;
-    ws += w;
+  if (ws > 1e-7) return acc / ws;
+  ivec3 c = ivec3(floor((p - VMIN) / uVS));
+  for (int i = 0; i < 27; i++) {
+    int vi = voxAt(c + ivec3(i % 3, (i / 3) % 3, i / 9) - 1);
+    if (vi < 0) continue;
+    for (int fc = 0; fc < 6; fc++) {
+      vec4 I = texelFetch(uSF, slotTC(vi * 6 + fc), 0);
+      float w = I.a * (max(dot(faceDir(fc), n), 0.0) + 0.05);
+      acc += I.rgb * w; ws += w;
+    }
   }
-  return ws > 0.0 ? acc / ws : vec3(0.0);
+  return ws > 0.0 ? acc / ws : ambientA();
+}
+// Один и тот же набор направлений для всех граней (Hammersley, по косинусу вокруг
+// нормали поверхности), но со своим сдвигом у каждой грани и каждой пачки лучей.
+float vdc(uint b) {
+  b = (b << 16u) | (b >> 16u);
+  b = ((b & 0x55555555u) << 1u) | ((b & 0xAAAAAAAAu) >> 1u);
+  b = ((b & 0x33333333u) << 2u) | ((b & 0xCCCCCCCCu) >> 2u);
+  b = ((b & 0x0F0F0F0Fu) << 4u) | ((b & 0xF0F0F0F0u) >> 4u);
+  b = ((b & 0x00FF00FFu) << 8u) | ((b & 0xFF00FF00u) >> 8u);
+  return float(b) * 2.3283064365386963e-10;
+}
+vec3 faceRay(vec3 n, int k, int j, int batch) {
+  uint h = pcg(uint(k) * 9781u + uint(batch) * 6271u + 17u);
+  vec2 rot = vec2(float(h), float(pcg(h))) * (1.0 / 4294967296.0);
+  vec2 u = fract(vec2((float(j) + 0.5) / float(uRays), vdc(uint(j))) + rot);
+  return cosDir(n, u);
+}
+// Уходящий свет поверхности, в которую упёрся луч: грань вокселя или шар.
+vec3 hitRadiance(int vi, vec3 n) {
+  if (vi == BALLV) return ballProbe(n, 1);
+  return slotLookup(uSA, vi, n) * (slotLookup(uSD, vi, n) + slotLookup(uSF, vi, n));
+}
+#if SCENE
+// Лучи выходят чуть над поверхностью грани (в статье из центра грани вокселя).
+vec3 rayOrigin(vec3 P, vec3 n) {
+  float vs = vsAvg();
+  vec3 o = clamp(P + n * (0.3 * vs), VMIN + 0.003, VMAX - 0.003);
+  if (insideSolid(o, 0.0)) o = clamp(P + n * (0.7 * vs), VMIN + 0.003, VMAX - 0.003);
+  return o;
+}
+// Луч по всей сцене -> 20 бит номер вокселя + 12 бит нормаль попадания.
+uint traceVox(vec3 ro, vec3 rd, out float t) {
+  vec3 n, ng, alb;
+  t = 1e9;
+  if (!traceScene(ro, rd, t, n, ng, alb)) { t = 1e9; return MISS; }   // ушёл в окно: небо уже в прямом свете
+  if (dot(ng, rd) > 0.0) ng = -ng;
+  vec3 q = ro + rd * t;
+  if (onBall(q)) return uint(BALLV) | (octEnc(normalize(q - uBall.xyz)) << 20u);
+  int vi = findVox(q, ng);
+  if (vi < 0) return MISS;
+  return uint(vi) | (octEnc(ng) << 20u);
 }
 
-// b0 = номер вершины, с которой начинается путь (0 = из камеры, 1 = из пробы);
-// nb = последний учитываемый отскок; fg = после первого отскока взять остальное из кэша.
+#if PASS == 0
+// ---------- путь ----------
+// b0 = номер вершины, с которой начинается путь; nb = последний учитываемый отскок;
+// fg = после первого отскока взять остальное из воксельного кэша.
 vec3 tracePath(vec3 ro, vec3 rd, int b0, int nb, bool fg) {
   vec3 L = vec3(0.0), thr = vec3(1.0);
   for (int b = b0; b < 8; b++) {
@@ -676,16 +905,14 @@ vec3 tracePath(vec3 ro, vec3 rd, int b0, int nb, bool fg) {
         acc += directE(pos, n, ldsAt(0, j), ldsAt(1, j));
       }
       dE = alb * acc / (PI * float(uDirN));
+      gDir = dE;
     } else {
       dE = alb * directE(pos, n, vec2(rnd(), rnd()), vec2(rnd(), rnd())) / PI;
     }
-    if (b == 0) {
-      gDir = dE;
-    }
     L += thr * dE;
     if (fg && b == 1 && b < nb) {
-      // финальный сбор: всё, что отразилось дальше, берём из прогретого кэша
-      L += thr * alb * cacheX(pos, n, false);
+      // финальный сбор: всё, что отразилось дальше, берём из вокселей
+      L += thr * alb * (onBall(p) ? ballProbe(n, 0) : voxI(p, n));
       break;
     }
     if (b == nb) L += thr * alb * SKYCOL * uSkyI * 0.035;
@@ -697,41 +924,273 @@ vec3 tracePath(vec3 ro, vec3 rd, int b0, int nb, bool fg) {
 }
 
 vec3 pathTrace(vec3 ro, vec3 rd) {
-  gN = vec3(0.0); gAlb = vec3(1.0); gT = 1000.0; gDir = vec3(0.0); gPrior = 0.0;
+  gN = vec3(0.0); gAlb = vec3(1.0); gT = 1000.0; gDir = vec3(0.0);
   return tracePath(ro, rd, 0, uBounces, uFG == 1);
 }
+#endif
+#endif
 
-#if PASS == 1
-// ---------- проход 1: обновление проб ----------
-void main() {
-  ivec2 ip = ivec2(gl_FragCoord.xy);
-  ivec3 c = ivec3(ip.x % GN.x, ip.y, ip.x / GN.x);
-  vec3 pp = probePos(c);
-  s0 = pcg(uint(ip.x) + pcg(uint(ip.y) + pcg(uSeed)));
-  uint hh = pcg(uint(ip.x) * 7919u + uint(ip.y) * 104729u + 12345u);
-  vec2 rot = vec2(float(hh), float(pcg(hh))) * (1.0 / 4294967296.0);
-  bool valid = !insideSolid(pp);
-  vec3 a0 = vec3(0.0), ax = vec3(0.0), ay = vec3(0.0), az = vec3(0.0);
-  if (valid) {
-    for (int s = 0; s < 32; s++) {
-      if (s >= uPS) break;
-      // ровно распределённые по сфере направления (Kronecker со сдвигом на пробу)
-      vec2 u = fract(rot + (uPN + float(s)) * vec2(0.7548776662, 0.5698402910));
-      float z = 1.0 - 2.0 * u.x, r = sqrt(max(0.0, 1.0 - z * z)), ph = 2.0 * PI * u.y;
-      vec3 d = vec3(r * cos(ph), z, r * sin(ph));
-      vec3 L = min(tracePath(pp, d, 1, uProbeB, false), vec3(20.0)) * (4.0 * PI);
-      a0 += L * 0.282095;
-      ax += L * (0.488603 * d.x); ay += L * (0.488603 * d.y); az += L * (0.488603 * d.z);
+#if PASS == 3 || PASS == 4
+// ---------- вокселизация ----------
+// Вместо растеризации треугольников по трём осям (Takeshige) сцена у нас аналитическая:
+// через каждый воксель вдоль трёх осей в обе стороны идут короткие лучи (3×3 на грань),
+// так что поверхность с любым наклоном не даёт дыр. Стены комнаты кладутся точками 4×4.
+bool boxOverlap(vec3 alo, vec3 ahi, vec3 blo, vec3 bhi) { return all(lessThanEqual(alo, bhi)) && all(lessThanEqual(blo, ahi)); }
+bool voxNearObj(vec3 lo, vec3 hi) {
+  if (!boxOverlap(lo, hi, BMIN, BMAX)) return false;
+  for (int i = 0; i < NB; i++) if (boxOverlap(lo, hi, WC[i] - WH[i], WC[i] + WH[i])) return true;
+  if (boxOverlap(lo, hi, vec3(0.44, 1.28, -2.09), vec3(1.5, 2.75, -2.05))) return true;
+  for (int i = 0; i < NV; i++) {
+    vec4 a = VA[i];
+    float r = max(max(a.z, VB[i].x), a.y) + 0.004;
+    if (boxOverlap(lo, hi, VP[i] - vec3(r, 0.004, r), VP[i] + vec3(r, a.x + 0.004, r))) return true;
+  }
+  return false;
+}
+void addSample(vec3 p, vec3 n, vec3 alb, int want, inout int mask, inout vec4 aP, inout vec3 aN, inout vec3 aA) {
+  for (int f = 0; f < 6; f++) {
+    if (dot(n, faceDir(f)) > 0.2) {
+      mask |= 1 << f;
+      if (f == want) { aP += vec4(p, 1.0); aN += n; aA += alb; }
     }
   }
-  float n0 = uReset > 0.5 ? 0.0 : uPN, nn = n0 + float(uPS);
-  outP0 = vec4((texelFetch(uP0, ip, 0).rgb * n0 + a0) / nn, valid ? 1.0 : 0.0);
-  outP1 = vec4((texelFetch(uP1, ip, 0).rgb * n0 + ax) / nn, 1.0);
-  outP2 = vec4((texelFetch(uP2, ip, 0).rgb * n0 + ay) / nn, 1.0);
-  outP3 = vec4((texelFetch(uP3, ip, 0).rgb * n0 + az) / nn, 1.0);
+}
+// Возвращает маску занятых граней вокселя c; для грани want копит точку, нормаль и цвет.
+int voxelize(ivec3 c, int want, out vec4 aP, out vec3 aN, out vec3 aA) {
+  aP = vec4(0.0); aN = vec3(0.0); aA = vec3(0.0);
+  int mask = 0;
+  vec3 lo = VMIN + vec3(c) * uVS, hi = lo + uVS;
+  float vs = vsAvg();
+  for (int w = 0; w < 6; w++) {
+    int ax = w >> 1;
+    bool mx = (w & 1) == 1;
+    int ci = ax == 0 ? c.x : (ax == 1 ? c.y : c.z);
+    int ni = ax == 0 ? uVN.x : (ax == 1 ? uVN.y : uVN.z);
+    if (ci != (mx ? ni - 1 : 0)) continue;
+    vec3 n = faceDir(ax * 2 + (mx ? 1 : 0));
+    int wid = ax == 0 ? (mx ? 3 : 2) : (ax == 1 ? (mx ? 4 : 0) : (mx ? 5 : 1));
+    for (int i = 0; i < 16; i++) {
+      vec2 u = (vec2(float(i & 3), float(i >> 2)) + 0.5) * 0.25;
+      vec3 q = mix(lo, hi, ax == 0 ? vec3(0.0, u.x, u.y) : (ax == 1 ? vec3(u.x, 0.0, u.y) : vec3(u.x, u.y, 0.0)));
+      if (ax == 0) q.x = mx ? XMAX : XMIN; else if (ax == 1) q.y = mx ? YMAX : 0.0; else q.z = mx ? ZMAX : ZMIN;
+      if (wid == 3 && inWindow(q.y, q.z)) continue;
+      if (insideSolid(q + n * 0.004, 0.012)) continue;
+      float oid; vec3 on;
+      // стена, вплотную закрытая предметом (ткань у задней стены), в грань не идёт
+      if (sceneIntersect(q + n * 0.002, n, 0.6 * vs, true, oid, on) > 0.0) continue;
+      addSample(q, n, wallAlbedo(q, wid), want, mask, aP, aN, aA);
+    }
+  }
+  if (voxNearObj(lo, hi)) {
+    for (int r = 0; r < 54; r++) {
+      int ax = r / 18, sd = (r / 9) % 2, kk = r % 9;
+      vec2 u = (vec2(float(kk % 3), float(kk / 3)) + 0.5) / 3.0;
+      vec3 dir = faceDir(ax * 2 + sd);
+      vec3 o = mix(lo, hi, ax == 0 ? vec3(0.0, u.x, u.y) : (ax == 1 ? vec3(u.x, 0.0, u.y) : vec3(u.x, u.y, 0.0)));
+      if (sd == 1) { if (ax == 0) o.x = hi.x; else if (ax == 1) o.y = hi.y; else o.z = hi.z; }
+      o -= dir * 0.001;
+      float len = (ax == 0 ? uVS.x : (ax == 1 ? uVS.y : uVS.z)) + 0.002;
+      float oid; vec3 on;
+      float t = sceneIntersect(o, dir, len, false, oid, on);
+      if (t > 0.0) {
+        vec3 p = o + dir * t;
+        vec3 sn, sg, alb;
+        shadeObject(p, oid, on, sn, sg, alb);
+        addSample(p, on, alb, want, mask, aP, aN, aA);
+      }
+    }
+  }
+  return mask;
+}
+#endif
+
+#if PASS == 3
+// ---------- вокселизация, проход 1: маска занятых граней для всей сетки ----------
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  int tcx = ip.x / uVN.x, tcy = ip.y / uVN.y;
+  ivec3 c = ivec3(ip.x - tcx * uVN.x, ip.y - tcy * uVN.y, tcy * uTC + tcx);
+  if (c.z >= uVN.z) { outX = vec4(0.0); return; }
+  vec4 aP; vec3 aN, aA;
+  int m = voxelize(c, -1, aP, aN, aA);
+  outX = vec4(float(m) / 255.0, 0.0, 0.0, 1.0);
+}
+#elif PASS == 4
+// ---------- вокселизация, проход 2: точка, нормаль и цвет каждой занятой грани ----------
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  int s = ip.y * SLOTW + ip.x;
+  if (texelFetch(uSK, ip, 0).r < 0) { out0 = vec4(0.0); out1 = vec4(0.0); out2 = vec4(0.0); return; }
+  int vi = s / 6, f = s - vi * 6;
+  ivec3 c = voxCoord(vi);
+  vec4 aP; vec3 aN, aA;
+  voxelize(c, f, aP, aN, aA);
+  vec3 P = VMIN + (vec3(c) + 0.5) * uVS, N = faceDir(f), A = vec3(0.5);
+  if (aP.w > 0.0) { P = aP.xyz / aP.w; N = normalize(aN + faceDir(f) * 1e-3); A = aA / aP.w; }
+  out0 = vec4(P, 1.0); out1 = vec4(N, 1.0); out2 = vec4(A, 1.0);
+}
+#elif PASS == 5
+// ---------- кэш видимости: один луч грани на тексель, считается один раз ----------
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  int lin = ip.y * uVisW + ip.x;
+  int k = lin / uRays, j = lin - k * uRays;
+  if (k >= uNF) { outV = uvec2(MISS, floatBitsToUint(1e9)); return; }
+  ivec2 tc = slotTC(texelFetch(uFS, ivec2(k % FSW, k / FSW), 0).r);
+  vec3 n = texelFetch(uSN, tc, 0).xyz;
+  float t;
+  uint e = traceVox(rayOrigin(texelFetch(uSP, tc, 0).xyz, n), faceRay(n, k, j, 0), t);
+  outV = uvec2(e, floatBitsToUint(t));
+}
+#elif PASS == 6
+// ---------- «освещённые воксели»: прямой свет на каждой грани ----------
+// В статье воксель освещён, если к свету видны 4 из 8 точек внутри него. Здесь вместо
+// да/нет берётся доля: теневые лучи к солнцу и окну из точек, разбросанных по грани.
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  if (texelFetch(uSK, ip, 0).r < 0) { out0 = vec4(0.0); out1 = vec4(0.0); out2 = vec4(0.0); return; }
+  vec3 P = texelFetch(uSP, ip, 0).xyz, n = texelFetch(uSN, ip, 0).xyz, alb = texelFetch(uSA, ip, 0).rgb;
+  vec3 t = normalize(cross(abs(n.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0), n)), bt = cross(n, t);
+  seedRot(pcg(uint(ip.x) * 7919u + uint(ip.y) * 104729u + 12345u));
+  float vs = vsAvg();
+  vec3 base = P + n * 0.008;
+  vec3 E = vec3(0.0);
+  for (int i = 0; i < 32; i++) {
+    if (i >= uLitN) break;
+    vec2 jt = fract(gRot2 + float(i) * vec2(0.2360679775, 0.6457513111)) - 0.5;
+    vec3 o = clamp(base + (t * jt.x + bt * jt.y) * (0.8 * vs), VMIN + 0.003, VMAX - 0.003);
+    if (insideSolid(o, 0.0)) o = base;
+    gDidx = float(i);
+    E += directE(o, n, ldsAt(0, 0), ldsAt(1, 0));
+  }
+  vec3 D = E / (PI * float(uLitN)), A = ambientA();
+  out0 = vec4(D, 1.0);                 // прямой свет
+  out1 = vec4(alb * (D + A), 1.0);     // уходящий свет для первого отскока
+  out2 = vec4(A, 1.0);                 // непрямой свет «0 отскоков» (то же, что в трассировке)
+}
+#elif PASS == 7
+// ---------- отскок: сбор по кэшу видимости, без трассировки ----------
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  int k = texelFetch(uSK, ip, 0).r;
+  if (k < 0) { out0 = vec4(0.0); out1 = vec4(0.0); return; }
+  vec3 acc = vec3(0.0);
+  float cnt = 0.0;
+  int base = k * uRays;
+  // Как в статье: статические попадания лежат в кэше, а заново трассируется только
+  // динамика (шар), и только если он не за спиной у грани. Ближе шар — берём его свет.
+  vec3 n = texelFetch(uSN, ip, 0).xyz;
+  vec3 o = clamp(texelFetch(uSP, ip, 0).xyz + n * (0.3 * vsAvg()), VMIN + 0.003, VMAX - 0.003);
+  bool ballNear = uBall.w > 0.0 && dot(uBall.xyz - o, n) > -uBall.w;
+  bool inBall = uBall.w > 0.0 && distance(o, uBall.xyz) < uBall.w;
+  for (int j = uPhase; j < uRays; j += uStride) {
+    int lin = base + j;
+    uvec2 e = texelFetch(uVis, ivec2(lin % uVisW, lin / uVisW), 0).rg;
+    cnt += 1.0;
+    if (ballNear) {
+      vec3 d = faceRay(n, k, j, 0);
+      float tb = hitBall(o, d, uintBitsToFloat(e.y));
+      if (tb > 0.0) {
+        acc += ballProbe(inBall ? -d : normalize(o + d * tb - uBall.xyz), 1);
+        continue;
+      }
+    }
+    if (e.x == MISS) continue;
+    acc += slotLookup(uSL, int(e.x & 0xFFFFFu), octDec(e.x >> 20u));
+  }
+  // лучи распределены по косинусу, поэтому освещённость / π = среднее яркости попаданий
+  vec3 I = acc / max(cnt, 1.0);
+  out0 = vec4(I, 1.0);
+  out1 = vec4(texelFetch(uSA, ip, 0).rgb * (texelFetch(uSD, ip, 0).rgb + I), 1.0);
+}
+#elif PASS == 8
+// ---------- сглаживание 3³ по соседним граням того же направления + временной фильтр ----------
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  int s = ip.y * SLOTW + ip.x;
+  vec4 c0 = texelFetch(uSI, ip, 0);
+  if (texelFetch(uSK, ip, 0).r < 0 || c0.a <= 0.0) { outX = vec4(0.0); return; }
+  vec3 I0 = c0.rgb / c0.a, res = I0;
+  if (uFilt == 1) {
+    int vi = s / 6, f = s - vi * 6;
+    ivec3 c = voxCoord(vi);
+    vec3 p0 = texelFetch(uSP, ip, 0).xyz, n0 = texelFetch(uSN, ip, 0).xyz;
+    float iv = 1.0 / vsAvg();
+    vec3 acc = I0;
+    float ws = 1.0;
+    for (int i = 0; i < 27; i++) {
+      if (i == 13) continue;
+      ivec3 d = ivec3(i % 3, (i / 3) % 3, i / 9) - 1;
+      int vj = voxAt(c + d);
+      if (vj < 0) continue;
+      ivec2 tj = slotTC(vj * 6 + f);
+      vec4 cj = texelFetch(uSI, tj, 0);
+      if (cj.a <= 0.0) continue;
+      float pd = dot(texelFetch(uSP, tj, 0).xyz - p0, n0) * iv;
+      float wn = max(dot(texelFetch(uSN, tj, 0).xyz, n0), 0.0);
+      wn *= wn; wn *= wn;
+      float w = uFiltK * exp2(-float(d.x * d.x + d.y * d.y + d.z * d.z)) * exp(-5.0 * pd * pd) * wn;
+      acc += cj.rgb / cj.a * w;
+      ws += w;
+    }
+    res = acc / ws;
+  }
+  vec4 prev = texelFetch(uSF, ip, 0);
+  if (uEma < 1.0 && prev.a > 0.5) res = mix(prev.rgb, res, uEma);
+  outX = vec4(res, 1.0);
+}
+#elif PASS == 9
+// ---------- досчёт в простое: новая пачка лучей для последнего отскока ----------
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  int k = texelFetch(uSK, ip, 0).r;
+  if (k < 0) { outX = vec4(0.0); return; }
+  vec4 prev = uRefInit == 1 ? vec4(texelFetch(uSI, ip, 0).rgb * float(uRays), float(uRays)) : texelFetch(uACC, ip, 0);
+  vec3 n = texelFetch(uSN, ip, 0).xyz;
+  vec3 ro = rayOrigin(texelFetch(uSP, ip, 0).xyz, n);
+  vec3 acc = vec3(0.0);
+  for (int j = 0; j < 256; j++) {
+    if (j >= uRays) break;
+    float t;
+    uint e = traceVox(ro, faceRay(n, k, j, uBatch), t);
+    if (e == MISS) continue;
+    int vi = int(e & 0xFFFFFu);
+    vec3 nh = octDec(e >> 20u);
+    acc += vi == BALLV ? ballProbe(nh, 1) : slotLookup(uSL, vi, nh);
+  }
+  outX = prev + vec4(acc, float(uRays));
+}
+#elif PASS == 11
+// ---------- свет шара: 8×8 направлений по его поверхности ----------
+// Отдельный от статики набор (в статье это отдельные текстуры динамических вокселей):
+// свет шара не протекает на неподвижные предметы и наоборот. Лучи идут по всей сцене,
+// попадания берут уходящий свет граней вокселей.
+void main() {
+  ivec2 ip = ivec2(gl_FragCoord.xy);
+  int side = ip.x / 8;
+  vec3 n = octFInv((vec2(float(ip.x - side * 8), float(ip.y)) + 0.5) * 0.25 - 1.0);
+  vec3 o = uBall.xyz + n * (uBall.w + 0.003);
+  seedRot(pcg(uint(ip.x % 8) * 7919u + uint(ip.y) * 104729u + 991u));
+  vec3 acc = vec3(0.0);
+  const int NR = 96;
+  for (int j = 0; j < NR; j++) {
+    vec2 u = fract(vec2((float(j) + 0.5) / float(NR), vdc(uint(j))) + gRot0);
+    vec3 d = cosDir(n, u);
+    float t; vec3 hn, hg, alb;
+    if (!traceScene(o, d, t, hn, hg, alb)) continue;
+    if (dot(hg, d) > 0.0) hg = -hg;
+    vec3 q = o + d * t;
+    int vi = findVox(q, hg);
+    if (vi >= 0) acc += hitRadiance(vi, hg);
+  }
+  vec3 I = acc / float(NR);
+  if (side == 0) { outX = vec4(I, 1.0); return; }
+  vec3 E = vec3(0.0);
+  for (int i = 0; i < 8; i++) { gDidx = float(i); E += directE(o, n, ldsAt(0, 0), ldsAt(1, 0)); }
+  outX = vec4(BALL_ALB * (E / (8.0 * PI) + I), 1.0);
 }
 #elif PASS == 2
-// ---------- проход 2: мягкий свет из кэша для каждого пикселя кадра ----------
+// ---------- мягкий свет из вокселей для каждого пикселя кадра (режим трассировки) ----------
 void main() {
   ivec2 ip = ivec2(gl_FragCoord.xy);
   vec4 G = texelFetch(uGb, ip, 0);
@@ -739,52 +1198,98 @@ void main() {
   vec2 uv = gl_FragCoord.xy / uRes * 2.0 - 1.0;
   vec3 rd = normalize(uCamF + uCamR * (uv.x * uTanV * uAspect) + uCamU * (uv.y * uTanV));
   vec3 n = normalize(G.xyz);
-  vec3 p = uCamPos + rd * G.w + n * 0.01;
-  vec3 X = cacheX(p, n, true);
-  if (uBounces == 0) X = SKYCOL * uSkyI * 0.035;
-  outX = vec4(X, 1.0);
+  vec3 p = uCamPos + rd * G.w;
+  outX = vec4(uBounces == 0 ? ambientA() : (onBall(p) ? ballProbe(n, 0) : voxI(p, n)), 1.0);
 }
 #else
+// ---------- кадр: PASS 0 = трассировка путей, PASS 10 = воксельный GI ----------
+#if PASS == 10
+// Воксели как есть: цвет грани × (прямой + непрямой свет), с тонкой сеткой по границам.
+vec3 voxNearest(vec3 p, vec3 n) {
+  if (onBall(p)) return ballProbe(normalize(p - uBall.xyz), 1);
+  int vi = findVox(p, n);
+  if (vi < 0) return vec3(0.0);
+  vec3 c = slotLookup(uSA, vi, n) * (slotLookup(uSD, vi, n) + slotLookup(uSF, vi, n));
+  vec3 fr = fract((p - VMIN) / uVS), an = abs(n);
+  vec3 e = min(fr, 1.0 - fr) + step(0.7, an);
+  return c * (min(min(e.x, e.y), e.z) < 0.05 ? 0.55 : 1.0);
+}
+// Основной проход статьи: G-буфер, точные тени трассировкой, непрямой свет из граней вокселей.
+vec3 voxPixel(vec3 ro, vec3 rd) {
+  gN = vec3(0.0); gAlb = vec3(1.0); gT = 1000.0; gDir = vec3(0.0);
+  float t; vec3 n, ng, alb;
+  if (!traceScene(ro, rd, t, n, ng, alb)) { vec3 sk = SKYCOL * uSkyI * 0.3; gDir = sk; return sk; }
+  if (dot(ng, rd) > 0.0) ng = -ng;
+  if (dot(n, rd) > 0.0) n = -n;
+  gN = n; gAlb = alb; gT = t;
+  vec3 p = ro + rd * t, pos = p + ng * 0.007;
+  if (uVoxDbg == 1) { vec3 c = voxNearest(p, ng); gDir = c; return c; }
+  vec3 acc = vec3(0.0);
+  for (int j = 0; j < 4; j++) {
+    if (j >= uDirN) break;
+    acc += directE(pos, n, ldsAt(0, j), ldsAt(1, j));
+  }
+  vec3 Ld = alb * acc / (PI * float(uDirN));
+  gDir = Ld;
+  vec3 I = uBounces == 0 ? ambientA() : (onBall(p) ? ballProbe(n, 0) : voxI(p, n));
+  // Ближний сбор: два коротких луча (≈ размер вокселя) проверяют то, что мельче вокселя.
+  // Если луч упёрся в предмет, это направление даёт не свет из вокселей, а свет самого
+  // предмета (его грань вокселя): щель у стены темнеет, а доска под кувшином подсвечивает его.
+  if (uAO > 0.0 && uBounces > 0 && uVoxOK == 1) {
+    float R = vsAvg();
+    vec3 sum = vec3(0.0);
+    for (int j = 0; j < 2; j++) {
+      vec3 d = cosDir(n, fract(gRot2 + (gSidx * 2.0 + float(j)) * vec2(0.2360679775, 0.6457513111)));
+      float oid; vec3 on, rn; int wid;
+      float th = sceneIntersect(pos, d, R, false, oid, on);
+      float tr = roomHit(pos, d, rn, wid);
+      if (tr < R && (th < 0.0 || tr < th)) {
+        vec3 q = pos + d * tr;
+        if (!(wid == 3 && inWindow(q.y, q.z))) { th = tr; on = rn; oid = 0.0; }
+      }
+      if (th > 0.0) {
+        if (dot(on, d) > 0.0) on = -on;
+        vec3 q = pos + d * th;
+        int vi = oid > 29.5 ? BALLV : findVox(q, on);
+        vec3 Lh = vi < 0 ? vec3(0.0) : hitRadiance(vi, on);
+        sum += mix(I, Lh, uAO * (1.0 - 0.5 * th / R));
+      } else sum += I;
+    }
+    I = sum * 0.5;
+  }
+  return Ld + alb * I;
+}
+#endif
 void main() {
   ivec2 ip = ivec2(gl_FragCoord.xy);
-  gN = vec3(0.0); gAlb = vec3(1.0); gT = 1000.0; gDir = vec3(0.0); gPrior = 0.0; gDoPrior = false; gSidx = 0.0;
+  gN = vec3(0.0); gAlb = vec3(1.0); gT = 1000.0; gDir = vec3(0.0); gSidx = 0.0;
   s0 = pcg(uint(ip.x) + pcg(uint(ip.y) + pcg(uSeed)));
-  uint hh = pcg(uint(ip.x) * 1973u + uint(ip.y) * 9277u + 26699u);
-  uint h2 = pcg(hh), h3 = pcg(h2), h4 = pcg(h3), h5 = pcg(h4), h6 = pcg(h5);
-  gRot0 = vec2(float(hh), float(h2)) * (1.0 / 4294967296.0);
-  gRot1 = vec2(float(h3), float(h4)) * (1.0 / 4294967296.0);
-  gRot2 = vec2(float(h5), float(h6)) * (1.0 / 4294967296.0);
+  seedRot(pcg(uint(ip.x) * 1973u + uint(ip.y) * 9277u + 26699u));
   vec4 prev = texelFetch(uPrev, ip, 0);
   vec4 prevD = texelFetch(uPrevD, ip, 0);
   float n0 = uReset > 0.5 ? 0.0 : prev.a;
   vec3 sum = vec3(0.0), sumD = vec3(0.0);
-  float prior = 0.0;
   for (int s = 0; s < 16; s++) {
     if (s >= uSpp) break;
     gSidx = n0 + float(s);
     gDidx = uDirBase + float(s) * float(uDirN);
-    gDoPrior = (s == 0);
     vec2 jit = uAA > 0.5 ? vec2(rnd(), rnd()) : vec2(0.5);
     vec2 uv = (gl_FragCoord.xy - 0.5 + jit) / uRes * 2.0 - 1.0;
     vec3 rd = normalize(uCamF + uCamR * (uv.x * uTanV * uAspect) + uCamU * (uv.y * uTanV));
-    if (uDebug == 1) {
-      float t; vec3 n, ng, alb;
-      vec3 c = vec3(0.0);
-      if (traceScene(uCamPos, rd, t, n, ng, alb)) { if (dot(n, rd) > 0.0) n = -n; gN = n; gAlb = alb; gT = t; c = alb * (0.30 + 0.70 * max(dot(n, normalize(vec3(0.4, 0.8, 0.5))), 0.0)); }
-      sum += c; sumD += c;
-    } else {
-      vec3 Lt = pathTrace(uCamPos, rd);
-      vec3 Ld = min(gDir, vec3(30.0));
-      vec3 Li = min(max(Lt - gDir, vec3(0.0)), vec3(20.0));
-      sum += Ld + Li; sumD += Ld;
-      if (s == 0) prior = gPrior;
-    }
+#if PASS == 10
+    vec3 Lt = voxPixel(uCamPos, rd);
+#else
+    vec3 Lt = pathTrace(uCamPos, rd);
+#endif
+    vec3 Ld = min(gDir, vec3(30.0));
+    vec3 Li = min(max(Lt - gDir, vec3(0.0)), vec3(20.0));
+    sum += Ld + Li; sumD += Ld;
   }
   float nn = n0 + float(uSpp);
   outC = vec4((prev.rgb * n0 + sum) / nn, nn);
   outD = vec4((prevD.rgb * n0 + sumD) / nn, 1.0);
   outG = vec4(gN, gT);
-  outA = vec4(gAlb, prior);
+  outA = vec4(gAlb, 0.0);
 }
 #endif
 </script>
@@ -863,7 +1368,7 @@ void main() {
   vec4 T = texelFetch(uTot, ti, 0);
   vec3 dir = texelFetch(uDir, ti, 0).rgb;
   vec3 ind = (uDN > 0.5) ? texelFetch(uTex, ti, 0).rgb * A.rgb : max(T.rgb - dir, vec3(0.0));
-  // мягкий свет из кэша проб: виден сразу после сдвига камеры и уступает
+  // мягкий свет из вокселей: виден сразу после сдвига камеры и уступает
   // честному расчёту по мере накопления сэмплов
   vec3 pr = A.rgb * texelFetch(uCache, ti, 0).rgb * uPriorAmt;
   if (uCacheOnly > 0.5) ind = pr;
@@ -897,6 +1402,22 @@ void main() {
     if (!extH) { fail('Видеокарта не умеет рендерить в float-текстуры, трассировке путей негде копировать кадры.'); return; }
     intFmt = gl.RGBA16F; texType = gl.HALF_FLOAT; maxSamples = 1000;
   }
+  var maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+  var dbgR = gl.getExtension('WEBGL_debug_renderer_info');
+  var GPU = String(dbgR ? gl.getParameter(dbgR.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+  // RGBA32F не на всех видеокартах годится для рендера в несколько текстур сразу: тогда
+  // весь движок переходит на RGBA16F (точности для освещения хватает).
+  function toHalf() {
+    if (intFmt === gl.RGBA16F || gl.isContextLost()) return false;
+    intFmt = gl.RGBA16F; texType = gl.HALF_FLOAT; maxSamples = 1000;
+    console.warn('GI: переход на RGBA16F');
+    return true;
+  }
+  function fatal(e) {
+    fail('Не удалось создать буфер для накопления кадров: ' + e.message + '. Видеокарта: ' + GPU + '.');
+    window.__glError = e.message;
+  }
+  var tq = gl.getExtension('EXT_disjoint_timer_query_webgl2');
 
   // Данные кувшинов: один источник для шейдера (таблица радиусов по кольцам).
   var VAd = [[0.62, 0.075, 0.155, 0.085], [0.44, 0.085, 0.147, 0.083], [0.56, 0.17, 0.27, 0.16], [0.2, 0.1, 0.16, 0.115], [0.4, 0.08, 0.125, 0.07], [0.72, 0.17, 0.22, 0.12], [0.26, 0.08, 0.135, 0.085]];
@@ -921,46 +1442,73 @@ void main() {
     var nl = t.indexOf('\n');
     return t.slice(0, nl) + '\n#define PASS ' + (pass || 0) + t.slice(nl);
   }
-  function compile(type, code) {
-    var s = gl.createShader(type); gl.shaderSource(s, code); gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { throw new Error(gl.getShaderInfoLog(s)); }
-    return s;
-  }
-  function program(vsId, fsId, pass) {
-    var p = gl.createProgram();
-    gl.attachShader(p, compile(gl.VERTEX_SHADER, src(vsId)));
-    gl.attachShader(p, compile(gl.FRAGMENT_SHADER, src(fsId, pass)));
+  // Шейдеры собираются параллельно (KHR_parallel_shader_compile), а статус проверяется,
+  // только когда сборка закончилась: страница не замирает, и видеопроцесс браузера не
+  // стоит на одной долгой компиляции D3D.
+  var pcx = gl.getExtension('KHR_parallel_shader_compile');
+  function shader(type, code) { var s = gl.createShader(type); gl.shaderSource(s, code); gl.compileShader(s); return s; }
+  // У каждого сэмплера свой постоянный текстурный блок во всех проходах.
+  var UNIT = { uPrev: 0, uPrevD: 1, uGb: 2, uVIdx: 3, uVis: 4, uSP: 5, uSN: 6, uSA: 7, uSD: 8, uSL: 9, uSI: 10, uSF: 11, uFS: 12, uSK: 13, uVC: 14, uACC: 15, uBP: 12 };   // uFS нужен только кэшу видимости, uBP — остальным
+  function startProgram(vsId, fsId, pass) {
+    var p = gl.createProgram(), vs = shader(gl.VERTEX_SHADER, src(vsId)), fs = shader(gl.FRAGMENT_SHADER, src(fsId, pass));
+    gl.attachShader(p, vs); gl.attachShader(p, fs);
     gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { throw new Error(gl.getProgramInfoLog(p)); }
+    return { p: p, vs: vs, fs: fs };
+  }
+  function linked(o) { return !pcx || gl.getProgramParameter(o.p, pcx.COMPLETION_STATUS_KHR); }
+  function finishProgram(o) {
+    var p = o.p;
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      throw new Error(gl.getShaderInfoLog(o.fs) || gl.getShaderInfoLog(o.vs) || gl.getProgramInfoLog(p) || (gl.isContextLost() ? 'контекст WebGL потерян' : 'нет текста ошибки'));
+    }
+    gl.useProgram(p);
     var u = {}, n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
-    for (var i = 0; i < n; i++) { var nm = gl.getActiveUniform(p, i).name; u[nm] = gl.getUniformLocation(p, nm); }
+    for (var i = 0; i < n; i++) {
+      var nm = gl.getActiveUniform(p, i).name;
+      u[nm] = gl.getUniformLocation(p, nm);
+      if (UNIT[nm] !== undefined) gl.uniform1i(u[nm], UNIT[nm]);
+    }
     return { p: p, u: u };
   }
-  var pt, disp, dn, prb, gat;
-  try { pt = program('vs', 'fsPT', 0); prb = program('vs', 'fsPT', 1); gat = program('vs', 'fsPT', 2); disp = program('vs', 'fsDisp'); dn = program('vs', 'fsDN'); }
-  catch (e) { fail('Ошибка шейдера: ' + e.message); window.__glError = e.message; return; }
-  gl.bindVertexArray(gl.createVertexArray());
-  [pt, prb, gat].forEach(function (pg) { gl.useProgram(pg.p); if (pg.u['VRT[0]']) gl.uniform1fv(pg.u['VRT[0]'], new Float32Array(VRTd)); });
+  // pt = кадр трассировкой путей, ptv = воксельный кадр, остальные = этапы воксельного кэша
+  var PROGS = [['pt', 'fsPT', 0], ['ptv', 'fsPT', 10], ['disp', 'fsDisp'], ['dn', 'fsDN'], ['gat', 'fsPT', 2],
+    ['vA', 'fsPT', 3], ['vB', 'fsPT', 4], ['vV', 'fsPT', 5], ['vD', 'fsPT', 6], ['vN', 'fsPT', 7], ['vF', 'fsPT', 8], ['vR', 'fsPT', 9], ['vP', 'fsPT', 11]];
+  var pt, ptv, disp, dn, gat, vA, vB, vV, vD, vN, vF, vR, vP;
+  var pending = PROGS.map(function (d) { return startProgram('vs', d[1], d[2]); });
+  var compileT0 = performance.now();
+
+  // Если видеокарта сбросит WebGL (драйвер или браузер решили, что она зависла),
+  // все дальнейшие вызовы пусты: говорим об этом прямо, а не ошибкой буфера.
+  var lost = false;
+  canvas.addEventListener('webglcontextlost', function (e) {
+    e.preventDefault(); lost = true;
+    fail('Видеокарта сбросила WebGL-контекст (браузер решил, что она зависла). Обновите страницу. Если повторится, уменьшите «Вокселей по ширине комнаты» или «Сэмплов на кадр».');
+  });
 
   // ---------- состояние ----------
-  var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false, full: true, target: 64, dn: true, dnPhi: 3, fpsFull: true, unlock: true, sway: false, prior: true, priorK: 8, priorAmt: 1, fg: true, cacheOnly: false };
+  var S = { bounces: 3, sunI: 4.5, skyI: 3, sunAz: 48, sunEl: 26, exposure: 1, rows: 232, levels: 40, facets: true, aa: false, full: true, target: 64, dn: false, dnPhi: 3, fpsFull: true, unlock: true, sway: false, prior: true, priorK: 8, priorAmt: 1, fg: true, cacheOnly: false,
+    vox: true, vres: 64, vrays: 128, vfilt: true, vref: true, vao: 1, vspp: 8, vdbg: false, ball: true, bfollow: true, bspeed: 1 };
   var cam = { yaw: 0, pitch: 0, k: 1 };
   var msAvg = 0, lastRec = 0;
   var dirBase = 0;
   var W = 0, H = 0, tex = [], fbo = [], cur = 0, count = 0, needReset = true, frameNo = 1, spp = 2;
   var outW = 0, outH = 0, interacting = 0, gatherDirty = true;
 
-  function mkTex(tw, th) {
+  function mkTexFmt(w, h, ifmt, fmt, type, data) {
     var t = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, t);
-    gl.texImage2D(gl.TEXTURE_2D, 0, intFmt, tw || W, th || H, 0, gl.RGBA, texType, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, data || null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return t;
   }
-  function mkFbo(attach) {
+  function mkTex(tw, th) { return mkTexFmt(tw || W, th || H, intFmt, gl.RGBA, texType, null); }
+  var FB_ERR = { 36054: 'INCOMPLETE_ATTACHMENT', 36055: 'MISSING_ATTACHMENT', 36057: 'INCOMPLETE_DIMENSIONS', 36061: 'UNSUPPORTED', 36182: 'INCOMPLETE_MULTISAMPLE' };
+  // Буфер из одной или нескольких текстур. Если видеокарта его не принимает, бросает
+  // ошибку с именем буфера и кодом: вызывающий решает, как обойтись без него.
+  function mkFbo(attach, name) {
     var f = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, f);
     var bufs = [];
@@ -969,13 +1517,28 @@ void main() {
       bufs.push(gl.COLOR_ATTACHMENT0 + i);
     }
     gl.drawBuffers(bufs);
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) { fail('Не удалось создать float-буфер для накопления кадров.'); }
+    var st = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (gl.isContextLost()) throw new Error('контекст WebGL потерян');
+    if (st !== gl.FRAMEBUFFER_COMPLETE) {
+      var ge = gl.getError();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.deleteFramebuffer(f);
+      throw new Error((name || 'буфер') + ' (' + (intFmt === gl.RGBA32F ? 'RGBA32F' : 'RGBA16F') + ', ' + (FB_ERR[st] || st) + (ge ? ', GL 0x' + ge.toString(16) : '') + ')');
+    }
     return f;
   }
   var gTex = null, aTex = null, dnTex = [], dnFbo = [], dTex = [], cTex = null, cFbo = null;
   function allocTargets() {
+    try { allocTargets0(); return true; }
+    catch (e) {
+      if (toHalf()) { try { allocTargets0(); if (VX.stage !== 'none') voxStart(); return true; } catch (e2) { e = e2; } }
+      fatal(e); return false;
+    }
+  }
+  function allocTargets0() {
     var old = tex.concat(dnTex, dTex, [gTex, aTex, cTex]);
     if (cFbo) gl.deleteFramebuffer(cFbo);
+    cTex = null; cFbo = null; gTex = null; aTex = null;
     for (var i = 0; i < old.length; i++) { if (old[i]) gl.deleteTexture(old[i]); }
     for (var j0 = 0; j0 < fbo.length; j0++) gl.deleteFramebuffer(fbo[j0]);
     for (var j1 = 0; j1 < dnFbo.length; j1++) gl.deleteFramebuffer(dnFbo[j1]);
@@ -985,80 +1548,424 @@ void main() {
     for (var j = 0; j < 2; j++) {
       var t = mkTex();
       var dd = mkTex(); dTex.push(dd);
-      tex.push(t); fbo.push(mkFbo([t, gTex, aTex, dd]));
+      tex.push(t); fbo.push(mkFbo([t, gTex, aTex, dd], 'кадр'));
       var d = mkTex();
-      dnTex.push(d); dnFbo.push(mkFbo([d]));
+      dnTex.push(d); dnFbo.push(mkFbo([d], 'шумодав'));
     }
-    cTex = mkTex(); cFbo = mkFbo([cTex]);
+    cTex = mkTex(); cFbo = mkFbo([cTex], 'кэш кадра');
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     document.getElementById('hRes').textContent = W + '×' + H + ' px';
     needReset = true;
   }
 
-  // ---------- кэш проб ----------
-  // Сетка 32×24×30 проб по всей комнате; в текстуре лежит как (x + z·32, y).
-  // Пробы не зависят от камеры, поэтому при повороте камеры кэш не сбрасывается,
-  // а только при смене света, числа отскоков или формы кувшинов.
-  var GNX = 32, GNY = 24, GNZ = 30, PW = GNX * GNZ, PH = GNY;
-  var PROBE_MAX = 2048, PROBE_MILESTONES = [64, 256, 1024, 2048];
-  var probe = { tex: [[], []], fbo: [], cur: 0, n: 0, reset: true };
-  for (var pi = 0; pi < 2; pi++) {
-    for (var pk = 0; pk < 4; pk++) probe.tex[pi].push(mkTex(PW, PH));
-    probe.fbo.push(mkFbo(probe.tex[pi]));
-  }
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  function cacheWanted() { return S.prior || S.fg || S.cacheOnly; }
-  function bindProbes(u) {
-    for (var k = 0; k < 4; k++) {
-      gl.activeTexture(gl.TEXTURE4 + k); gl.bindTexture(gl.TEXTURE_2D, probe.tex[probe.cur][k]);
-      gl.uniform1i(u['uP' + k], 4 + k);
-    }
-  }
   function sunDir() {
     var az = S.sunAz * Math.PI / 180, el = S.sunEl * Math.PI / 180;
     return [Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)];
   }
   function sceneUniforms(u) {
+    var b = ballNow();
+    gl.uniform4f(u.uBall, b ? b.p[0] : 0, b ? b.p[1] : 0, b ? b.p[2] : 0, b ? BALL_R : 0);
+    if (b) gl.uniformMatrix3fv(u.uBallM, true, b.m);
     gl.uniform3fv(u.uSunDir, sunDir());
     gl.uniform1f(u.uSunI, S.sunI); gl.uniform1f(u.uSkyI, S.skyI);
     gl.uniform1i(u.uBounces, S.bounces);
     gl.uniform1f(u.uFacet, S.facets ? 1 : 0);
-    gl.uniform1i(u.uFG, S.fg ? 1 : 0);
-    gl.uniform1i(u.uProbeB, S.fg ? Math.max(S.bounces - 1, 0) : S.bounces);
   }
-  // Один проход: каждой пробе добавляется m путей. Возвращает true, если кэш изменился.
-  function updateProbes() {
-    if (!cacheWanted()) return false;
-    if (!probe.reset && probe.n >= PROBE_MAX) return false;
-    var n0 = probe.reset ? 0 : probe.n, m = n0 < 32 ? 16 : 8, u = prb.u, dst = 1 - probe.cur;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, probe.fbo[dst]);
-    gl.viewport(0, 0, PW, PH);
-    gl.useProgram(prb.p);
-    bindProbes(u);
-    sceneUniforms(u);
-    gl.uniform1f(u.uPN, n0); gl.uniform1i(u.uPS, m);
-    gl.uniform1f(u.uReset, probe.reset ? 1 : 0);
-    gl.uniform1ui(u.uSeed, (frameNo++ * 2654435761) >>> 0);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-    probe.cur = dst;
-    var was = n0;
-    probe.n = n0 + m; probe.reset = false;
-    // финальный сбор берёт отскоки из кэша: когда кэш заметно уточнился, кадр пересчитывается
-    if (S.fg && S.bounces > 1) {
-      for (var i = 0; i < PROBE_MILESTONES.length; i++) {
-        if (was > 0 && was < PROBE_MILESTONES[i] && probe.n >= PROBE_MILESTONES[i]) needReset = true;
+
+  // ---------- таймеры видеокарты ----------
+  var tqs = [], tAvg = {}, tqCur = null;
+  function gpuBegin(name) {
+    if (!tq || tqCur) return;
+    var q = gl.createQuery();
+    gl.beginQuery(tq.TIME_ELAPSED_EXT, q);
+    tqCur = { q: q, name: name };
+  }
+  function gpuEnd() {
+    if (!tqCur) return;
+    gl.endQuery(tq.TIME_ELAPSED_EXT);
+    tqs.push(tqCur); tqCur = null;
+  }
+  function gpuPoll() {
+    if (!tq) return;
+    var disjoint = gl.getParameter(tq.GPU_DISJOINT_EXT);
+    while (tqs.length) {
+      var c = tqs[0];
+      if (!gl.getQueryParameter(c.q, gl.QUERY_RESULT_AVAILABLE)) break;
+      var ns = gl.getQueryParameter(c.q, gl.QUERY_RESULT);
+      gl.deleteQuery(c.q); tqs.shift();
+      if (!disjoint) { var ms = ns / 1e6; tAvg[c.name] = tAvg[c.name] == null ? ms : tAvg[c.name] * 0.8 + ms * 0.2; }
+    }
+  }
+
+  // ---------- воксельный кэш ----------
+  // Сетка покрывает комнату целиком, стены лежат на её границах.
+  // Этапы: маска граней (GPU) -> сжатие списка занятых вокселей (CPU, один раз)
+  // -> точки граней -> кэш видимости (лучи один раз) -> свет (при каждой смене света).
+  var RX0 = -1.6, RX1 = 1.9, RY1 = 2.7, RZ0 = -2.1, RZ1 = 1.2;
+  var SLOTW = 1536, FSW = 1024, VCW = 256, REFMAX = 7, RAY_BUDGET = 700000;
+  var VX = { stage: 'none', ok: false, texs: [], fbos: [] };
+  function texInt(w, h, data) { return mkTexFmt(w, h, gl.R32I, gl.RED_INTEGER, gl.INT, data); }
+  function vt(t) { VX.texs.push(t); return t; }
+  function vf(attach, name) { var f = mkFbo(attach, name); VX.fbos.push(f); return f; }
+  function voxStart() {
+    VX.texs.forEach(function (t) { gl.deleteTexture(t); });
+    VX.fbos.forEach(function (f) { gl.deleteFramebuffer(f); });
+    var nx = S.vres, sx = (RX1 - RX0) / nx;
+    var ny = Math.max(8, Math.round(RY1 / sx)), nz = Math.max(8, Math.round((RZ1 - RZ0) / sx));
+    var tc = Math.ceil(Math.sqrt(nz)), tr = Math.ceil(nz / tc);
+    VX = { stage: 'mask', ok: false, texs: [], fbos: [], nx: nx, ny: ny, nz: nz, vs: [(RX1 - RX0) / nx, RY1 / ny, (RZ1 - RZ0) / nz],
+      tc: tc, aw: nx * tc, ah: ny * tr, row: 0, t0: performance.now(), buildMs: 0, lightState: 'dirty', lastInput: 0, ref: null, sfCur: 0, iCur: 0, k: 0, phase: 0, lights: 0 };
+    gatherDirty = true; needReset = true;
+    try {
+      VX.mask = vt(mkTexFmt(VX.aw, VX.ah, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, null));
+      VX.maskFbo = vf([VX.mask], 'маска вокселей');
+    } catch (e) { voxFail(e); }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+  // Буферы вокселей не создались: сначала пробуем RGBA16F для всего движка, иначе
+  // выключаем только воксельный GI, а трассировка путей продолжает работать.
+  function voxFail(e) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (toHalf()) { if (allocTargets()) voxStart(); return; }
+    VX.stage = 'failed'; VX.ok = false; VX.err = e.message;
+    console.warn('GI: воксельный GI отключён: ' + e.message + ' / ' + GPU);
+    needReset = true; gatherDirty = true;
+  }
+  function voxOn() { return S.vox && VX.stage !== 'failed'; }
+  // Как в статье: сжатый список занятых вокселей + сетка индексов в него. Здесь же
+  // нумеруются занятые грани, для которых в кэше видимости будут лучи.
+  function voxCompact() {
+    var aw = VX.aw, ah = VX.ah, nx = VX.nx, ny = VX.ny, nz = VX.nz, tc = VX.tc;
+    var buf = new Uint8Array(aw * ah * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, VX.maskFbo);
+    gl.readPixels(0, 0, aw, ah, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    var idx = new Int32Array(nx * ny * nz), lin = [], masks = [];
+    for (var z = 0; z < nz; z++) {
+      var ox = (z % tc) * nx, oy = Math.floor(z / tc) * ny;
+      for (var y = 0; y < ny; y++) {
+        for (var x = 0; x < nx; x++) {
+          var m = buf[((oy + y) * aw + ox + x) * 4];
+          if (!m) continue;
+          var l = x + nx * (y + ny * z);
+          lin.push(l); masks.push(m); idx[l] = lin.length;
+        }
       }
+    }
+    var nvox = lin.length, slotH = Math.max(1, Math.ceil(nvox * 6 / SLOTW));
+    var sk = new Int32Array(SLOTW * slotH).fill(-1), fsl = [];
+    for (var v = 0; v < nvox; v++) for (var f = 0; f < 6; f++) if ((masks[v] >> f) & 1) { sk[v * 6 + f] = fsl.length; fsl.push(v * 6 + f); }
+    var nf = fsl.length;
+    var fsH = Math.max(1, Math.ceil(nf / FSW)), fsA = new Int32Array(FSW * fsH); fsA.set(fsl);
+    var vcH = Math.max(1, Math.ceil(nvox / VCW)), vcA = new Int32Array(VCW * vcH); vcA.set(lin);
+    var R = S.vrays, visW, visH;
+    for (;;) {
+      visW = Math.floor(Math.min(4096, maxTex) / R) * R;
+      visH = Math.max(1, Math.ceil(nf * R / visW));
+      if (visH <= maxTex || R <= 32) break;
+      R >>= 1;
+    }
+    VX.idx3 = vt(gl.createTexture());
+    gl.bindTexture(gl.TEXTURE_3D, VX.idx3);
+    gl.texImage3D(gl.TEXTURE_3D, 0, gl.R32I, nx, ny, nz, 0, gl.RED_INTEGER, gl.INT, idx);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+    VX.vc = vt(texInt(VCW, vcH, vcA)); VX.sk = vt(texInt(SLOTW, slotH, sk)); VX.fs = vt(texInt(FSW, fsH, fsA));
+    VX.sp = vt(mkTex(SLOTW, slotH)); VX.sn = vt(mkTex(SLOTW, slotH)); VX.sa = vt(mkTex(SLOTW, slotH));
+    VX.surfFbo = vf([VX.sp, VX.sn, VX.sa], 'грани вокселей');
+    VX.vis = vt(mkTexFmt(visW, visH, gl.RG32UI, gl.RG_INTEGER, gl.UNSIGNED_INT, null));
+    VX.visFbo = vf([VX.vis], 'кэш видимости RG32UI');
+    VX.bp = vt(mkTex(16, 8)); VX.bpFbo = vf([VX.bp], 'свет шара');
+    VX.sd = vt(mkTex(SLOTW, slotH));
+    VX.lo = [vt(mkTex(SLOTW, slotH)), vt(mkTex(SLOTW, slotH))];
+    VX.ii = [vt(mkTex(SLOTW, slotH)), vt(mkTex(SLOTW, slotH))];
+    VX.sf = [vt(mkTex(SLOTW, slotH)), vt(mkTex(SLOTW, slotH))];
+    VX.acc = [vt(mkTex(SLOTW, slotH)), vt(mkTex(SLOTW, slotH))];
+    VX.dirFbo = vf([VX.sd, VX.lo[0], VX.ii[0]], 'прямой свет граней');
+    VX.bFbo = [vf([VX.ii[0], VX.lo[0]], 'отскоки'), vf([VX.ii[1], VX.lo[1]], 'отскоки')];
+    VX.sfFbo = [vf([VX.sf[0]], 'фильтр'), vf([VX.sf[1]], 'фильтр')];
+    VX.accFbo = [vf([VX.acc[0]], 'досчёт'), vf([VX.acc[1]], 'досчёт')];
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    VX.nvox = nvox; VX.nf = nf; VX.slotH = slotH; VX.rays = R; VX.visW = visW; VX.visH = visH;
+    VX.stage = 'surf';
+  }
+  function voxUniforms(u) {
+    gl.uniform3i(u.uVN, VX.nx, VX.ny, VX.nz);
+    gl.uniform3f(u.uVS, VX.vs[0], VX.vs[1], VX.vs[2]);
+    gl.uniform1i(u.uTC, VX.tc);
+    gl.uniform1i(u.uRays, VX.rays || 1); gl.uniform1i(u.uVisW, VX.visW || 1); gl.uniform1i(u.uNF, VX.nf || 0);
+    gl.uniform1i(u.uVoxOK, VX.ok ? 1 : 0);
+  }
+  // Привязывает ровно нужные проходу текстуры к блокам 2..15, остальные блоки пусты:
+  // текстура, в которую проход пишет, не может оказаться среди читаемых.
+  function bindSet(m) {
+    for (var un = 2; un < 16; un++) { gl.activeTexture(gl.TEXTURE0 + un); gl.bindTexture(gl.TEXTURE_2D, m[un] || null); }
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_3D, m.idx ? VX.idx3 : null);
+  }
+  function plus(a, b) { for (var k in b) a[k] = b[k]; return a; }
+  function vbase() { return { idx: 1, 4: VX.vis, 5: VX.sp, 6: VX.sn, 7: VX.sa, 12: VX.bp, 13: VX.sk, 14: VX.vc }; }
+  function vDraw(prog, fb, w, h, inputs, y0, y1, extra) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(prog.p);
+    bindSet(inputs);
+    voxUniforms(prog.u);
+    sceneUniforms(prog.u);
+    // вокселизация и кэш видимости строятся только по неподвижной геометрии
+    if (prog === vA || prog === vB || prog === vV) gl.uniform4f(prog.u.uBall, 0, 0, 0, 0);
+    if (extra) extra(prog.u);
+    if (y0 != null) { gl.enable(gl.SCISSOR_TEST); gl.scissor(0, y0, w, y1 - y0); }
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (y0 != null) gl.disable(gl.SCISSOR_TEST);
+  }
+  // Сколько отскоков держит кэш: в трассировке с финальным сбором первый отскок честный.
+  function cacheK() { return voxOn() ? S.bounces : (S.fg ? Math.max(S.bounces - 1, 0) : S.bounces); }
+  // Пересчёт света: прямой свет на гранях, затем k отскоков по кэшу видимости, затем фильтр.
+  // hot = свет сейчас двигают: меньше теневых лучей, половина лучей отскока и сглаживание во времени.
+  function voxLight(hot) {
+    var k = cacheK(), c = 0;
+    VX.phase++;
+    gpuBegin('direct');
+    vDraw(vD, VX.dirFbo, SLOTW, VX.slotH, { 5: VX.sp, 6: VX.sn, 7: VX.sa, 13: VX.sk }, null, null, function (u) { gl.uniform1i(u.uLitN, hot ? 4 : 16); });
+    gpuEnd();
+    if (ballNow()) {
+      gpuBegin('ball');
+      vDraw(vP, VX.bpFbo, 16, 8, plus(vbase(), { 8: VX.sd, 11: VX.sf[VX.sfCur], 12: null }));
+      gpuEnd();
+    }
+    gpuBegin('bounce');
+    for (var j = 0; j < k; j++) {
+      vDraw(vN, VX.bFbo[1 - c], SLOTW, VX.slotH, plus(vbase(), { 8: VX.sd, 9: VX.lo[c] }), null, null, function (u) {
+        gl.uniform1i(u.uStride, hot ? 2 : 1); gl.uniform1i(u.uPhase, hot ? (VX.phase & 1) : 0);
+      });
+      c = 1 - c;
+    }
+    gpuEnd();
+    VX.iCur = c; VX.k = k;
+    gpuBegin('filter');
+    voxFilter(VX.ii[c], hot ? 0.5 : 1, 1);
+    gpuEnd();
+    VX.ok = true; VX.lights++;
+  }
+  function voxFilter(srcTex, ema, fk) {
+    var d = 1 - VX.sfCur;
+    vDraw(vF, VX.sfFbo[d], SLOTW, VX.slotH, plus(vbase(), { 10: srcTex, 11: VX.sf[VX.sfCur] }), null, null, function (u) {
+      gl.uniform1i(u.uFilt, S.vfilt ? 1 : 0); gl.uniform1f(u.uEma, ema); gl.uniform1f(u.uFiltK, fk);
+    });
+    VX.sfCur = d;
+  }
+  // Новая пачка лучей последнего отскока, по нескольку строк слотов за кадр.
+  function voxRefine() {
+    var R = VX.ref;
+    if (!R || !S.vref || VX.k < 1 || R.b >= REFMAX) return false;
+    var perRow = Math.max(1, VX.nf / VX.slotH) * VX.rays;
+    var y1 = Math.min(VX.slotH, R.row + Math.max(1, Math.floor(RAY_BUDGET / perRow)));
+    gpuBegin('refine');
+    vDraw(vR, VX.accFbo[1 - R.cur], SLOTW, VX.slotH, plus(vbase(), { 9: VX.lo[1 - VX.iCur], 10: VX.ii[VX.iCur], 15: VX.acc[R.cur] }), R.row, y1, function (u) {
+      gl.uniform1i(u.uBatch, R.b + 1); gl.uniform1i(u.uRefInit, R.b === 0 ? 1 : 0);
+    });
+    gpuEnd();
+    R.row = y1;
+    if (R.row >= VX.slotH) {
+      R.row = 0; R.cur = 1 - R.cur; R.b++;
+      voxFilter(VX.acc[R.cur], 1, 1 / (1 + 0.6 * R.b));
+      // в трассировке кадр перезапускается только после 1, 3 и 7 пачек, чтобы не терять накопленное
+      if (voxFrame() || (R.b & (R.b + 1)) === 0) needReset = true;
+      gatherDirty = true;
     }
     return true;
   }
-  // Мягкий свет из кэша для пикселей кадра (по G-буферу последнего прохода).
+  function voxStep(idle) {
+    if (VX.stage === 'mask') {
+      var y1 = Math.min(VX.ah, VX.row + Math.ceil(VX.ah / 4));
+      gpuBegin('build');
+      vDraw(vA, VX.maskFbo, VX.aw, VX.ah, {}, VX.row, y1);
+      gpuEnd();
+      VX.row = y1;
+      if (VX.row >= VX.ah) { try { voxCompact(); } catch (e) { voxFail(e); } }
+      return true;
+    }
+    if (VX.stage === 'surf') {
+      gpuBegin('build');
+      vDraw(vB, VX.surfFbo, SLOTW, VX.slotH, { 13: VX.sk, 14: VX.vc });
+      gpuEnd();
+      VX.stage = 'vis'; VX.row = 0;
+      return true;
+    }
+    if (VX.stage === 'vis') {
+      var y2 = Math.min(VX.visH, VX.row + Math.max(1, Math.floor(RAY_BUDGET / VX.visW)));
+      gpuBegin('build');
+      vDraw(vV, VX.visFbo, VX.visW, VX.visH, { idx: 1, 5: VX.sp, 6: VX.sn, 12: VX.fs }, VX.row, y2);
+      gpuEnd();
+      VX.row = y2;
+      if (VX.row >= VX.visH) { VX.stage = 'ready'; VX.buildMs = performance.now() - VX.t0; VX.lightState = 'dirty'; VX.lastInput = 0; }
+      return true;
+    }
+    if (VX.stage !== 'ready') return false;
+    if (VX.lightState === 'dirty') {
+      var hot = performance.now() - VX.lastInput < 220;
+      voxLight(hot);
+      if (!hot) { VX.lightState = 'ok'; VX.ref = { b: 0, row: 0, cur: 0 }; }
+      needReset = true; gatherDirty = true;
+      return true;
+    }
+    return idle && voxRefine() ? 'refine' : false;
+  }
+  function voxStatus() {
+    if (VX.stage === 'mask') return 'вокселизация ' + Math.round(100 * VX.row / VX.ah) + '%';
+    if (VX.stage === 'surf') return 'грани…';
+    if (VX.stage === 'vis') return 'лучи ' + Math.round(100 * VX.row / VX.visH) + '%';
+    if (VX.stage === 'failed') return 'выкл.';
+    if (VX.stage !== 'ready') return '—';
+    var b = VX.ref ? VX.ref.b : 0;
+    return (VX.nvox / 1000).toFixed(1) + 'k · ' + VX.rays * (1 + (VX.k > 0 && S.vref ? b : 0)) + ' луч.' + (VX.lightState === 'ok' ? ' ✓' : '');
+  }
+
+  // ---------- физика шара ----------
+  var BALL_R = 0.1, ROOM = { x0: -1.6, x1: 1.9, y1: 2.7, z0: -2.1, z1: 1.2 };
+  var PH_BOX = [
+    [0.800, 0.590, -1.900, 0.600, 0.020, 0.200], [0.255, 0.285, -1.735, 0.035, 0.285, 0.035], [1.345, 0.285, -1.735, 0.035, 0.285, 0.035], [0.255, 0.285, -2.065, 0.035, 0.285, 0.035], [1.345, 0.285, -2.065, 0.035, 0.285, 0.035],
+    [-0.500, 0.590, -1.400, 0.600, 0.020, 0.350], [-0.500, 0.120, -1.400, 0.600, 0.020, 0.350], [-0.650, 1.425, -1.525, 0.450, 0.015, 0.225],
+    [-0.360, 1.300, -1.050, 0.090, 1.300, 0.040], [-0.250, 1.300, -1.730, 0.040, 1.300, 0.040], [-1.080, 1.300, -1.730, 0.040, 1.300, 0.040], [-1.080, 1.300, -1.050, 0.040, 1.300, 0.040],
+    [-0.045, 0.285, -1.060, 0.065, 0.285, 0.060], [0.050, 0.285, -1.700, 0.040, 0.285, 0.040], [-1.050, 0.285, -1.700, 0.040, 0.285, 0.040], [-1.050, 0.285, -1.060, 0.040, 0.285, 0.040]];
+  var PH_VP = [[0.31, 0.61, -1.93], [0.53, 0.61, -1.85], [0.58, 0.00, -1.85], [-0.06, 0.61, -1.50], [-0.03, 0.61, -1.90], [-0.36, 0.61, -1.72], [-0.34, 1.44, -1.58]];
+  // Шар считается заранее: шаг 1/600 с, кадры по 1/60 с (положение + поворот).
+  // prof(i, y) = радиус кувшина i на высоте y, VH[i] = его высота.
+  function ballSimulate(p0, v0, prof, VH, opt) {
+    opt = opt || {};
+    var dt = 1 / 600, g = 9.81, R = BALL_R;
+    var p = p0.slice(), v = v0.slice(), w = [0, 0, 0], M = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    var crr = opt.crr || 0.07, frames = [], events = [], touched = {}, onTime = {}, t = 0, rest = false, lastSupport = null, fps = 60, nextF = 0;
+    function add(a, b, s) { return [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s]; }
+    function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+    function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+    function len(a) { return Math.sqrt(dot(a, a)); }
+    var tMax = opt.tMax || 14;
+    while (t < tMax) {
+      if (t >= nextF - 1e-9) { frames.push({ t: t, p: p.slice(), m: M.slice() }); nextF += 1 / fps; }
+      if (rest) { t += dt; continue; }
+      v[1] -= g * dt;
+      p = add(p, v, dt);
+      var support = null, sn = null;
+      var contacts = [];
+      // доски и стойки
+      for (var i = 0; i < PH_BOX.length; i++) {
+        var b = PH_BOX[i];
+        var q = [Math.max(b[0] - b[3], Math.min(b[0] + b[3], p[0])), Math.max(b[1] - b[4], Math.min(b[1] + b[4], p[1])), Math.max(b[2] - b[5], Math.min(b[2] + b[5], p[2]))];
+        var d = [p[0] - q[0], p[1] - q[1], p[2] - q[2]], dl = len(d);
+        if (dl < R) contacts.push({ n: dl > 1e-6 ? [d[0] / dl, d[1] / dl, d[2] / dl] : [0, 1, 0], pen: R - dl, id: 'box' + i });
+      }
+      // кувшины: тела вращения
+      for (var j = 0; j < PH_VP.length; j++) {
+        var c = PH_VP[j], qx = p[0] - c[0], qy = p[1] - c[1], qz = p[2] - c[2], H = VH[j];
+        if (qy < -R || qy > H + R) continue;
+        var rad = Math.hypot(qx, qz); if (rad < 1e-6) continue;
+        var yy = Math.max(0, Math.min(H, qy)), r = prof(j, yy), k = (prof(j, Math.min(H, yy + 0.01)) - prof(j, Math.max(0, yy - 0.01))) / 0.02;
+        var nn = [qx / rad, -k, qz / rad], nl = len(nn); nn = [nn[0] / nl, nn[1] / nl, nn[2] / nl];
+        var dist = (rad - r) / nl;
+        if (qy > H) dist = Math.max(dist, Math.hypot(Math.max(0, rad - r), qy - H));
+        if (dist < R) contacts.push({ n: nn, pen: R - dist, id: 'vase' + j });
+      }
+      // комната
+      if (p[1] < R) contacts.push({ n: [0, 1, 0], pen: R - p[1], id: 'floor' });
+      if (p[0] < ROOM.x0 + R) contacts.push({ n: [1, 0, 0], pen: ROOM.x0 + R - p[0], id: 'wallX0' });
+      if (p[0] > ROOM.x1 - R) contacts.push({ n: [-1, 0, 0], pen: p[0] - ROOM.x1 + R, id: 'wallX1' });
+      if (p[2] < ROOM.z0 + R) contacts.push({ n: [0, 0, 1], pen: ROOM.z0 + R - p[2], id: 'wallZ0' });
+      if (p[2] > ROOM.z1 - R) contacts.push({ n: [0, 0, -1], pen: p[2] - ROOM.z1 + R, id: 'wallZ1' });
+      for (var ci = 0; ci < contacts.length; ci++) {
+        var C = contacts[ci], n = C.n;
+        touched[C.id] = 1;
+        p = add(p, n, C.pen);
+        var vn = dot(v, n);
+        if (vn < 0) {
+          var hard = vn < -0.25, e = hard ? (n[1] > 0.6 ? 0.32 : 0.45) : 0;
+          v = add(v, n, -(1 + e) * vn);
+          if (hard) {
+            var vt = add(v, n, -dot(v, n));
+            v = add(v, vt, -0.12);   // удар гасит часть скольжения
+            events.push({ t: t, id: C.id, vn: -vn });
+          }
+        }
+        if (n[1] > 0.5) { support = C.id; sn = n; }
+      }
+      if (support) {
+        if (support !== lastSupport) events.push({ t: t, id: support, land: true });
+        lastSupport = support;
+        onTime[support] = (onTime[support] || 0) + dt;
+        // качение без проскальзывания и сопротивление качению
+        var vt2 = add(v, sn, -dot(v, sn)), s = len(vt2);
+        if (s > 1e-9) { var s2 = Math.max(0, s - crr * dt); v = add(add(v, vt2, -1), vt2, s2 / s); }
+        w = cross(sn, v); w = [w[0] / R, w[1] / R, w[2] / R];
+        if (support === 'floor' && len(v) < 0.012) { v = [0, 0, 0]; w = [0, 0, 0]; rest = true; events.push({ t: t, id: 'rest' }); }
+      } else lastSupport = null;
+      // поворот шара (формула Родрига)
+      var wl = len(w);
+      if (wl > 1e-9) {
+        var a = wl * dt, ax = [w[0] / wl, w[1] / wl, w[2] / wl], cs = Math.cos(a), sn2 = Math.sin(a), oc = 1 - cs;
+        var Rm = [cs + ax[0] * ax[0] * oc, ax[0] * ax[1] * oc - ax[2] * sn2, ax[0] * ax[2] * oc + ax[1] * sn2,
+          ax[1] * ax[0] * oc + ax[2] * sn2, cs + ax[1] * ax[1] * oc, ax[1] * ax[2] * oc - ax[0] * sn2,
+          ax[2] * ax[0] * oc - ax[1] * sn2, ax[2] * ax[1] * oc + ax[0] * sn2, cs + ax[2] * ax[2] * oc];
+        var N = [];
+        for (var r0 = 0; r0 < 3; r0++) for (var c0 = 0; c0 < 3; c0++) N.push(Rm[r0 * 3] * M[c0] + Rm[r0 * 3 + 1] * M[3 + c0] + Rm[r0 * 3 + 2] * M[6 + c0]);
+        M = N;
+      }
+      t += dt;
+    }
+    return { frames: frames, events: events, touched: touched, onTime: onTime, rest: rest, end: p };
+  }
+
+  // Подобранный толчок: верхняя полка -> край -> нижняя полка -> пол -> стена под окном.
+  var BALL = { frames: null, t: -0.8, end: 0, playing: true, last: performance.now(), key: '' };
+  function ballInit() {
+    var prof = function (i, y) { return vRj(VAd[i], VBd[i], y); }, VH = VAd.map(function (a) { return a[0]; });
+    var th = 1.4089, sp = 0.4112;
+    var r = ballSimulate([-0.7949, 1.44 + BALL_R, -1.3925], [Math.sin(th) * sp, 0, Math.cos(th) * sp], prof, VH, { tMax: 10 });
+    var rest = r.events.filter(function (e) { return e.id === 'rest'; })[0];
+    BALL.frames = r.frames; BALL.end = Math.min(r.frames.length - 1, Math.ceil(((rest ? rest.t : 9) + 0.1) * 60)) / 60;
+  }
+  function ballNow() {
+    if (!S.ball || !BALL.frames) return null;
+    var i = Math.max(0, Math.min(BALL.frames.length - 1, Math.round(Math.max(0, BALL.t) * 60)));
+    return BALL.frames[i];
+  }
+  function ballRestart() { BALL.t = -0.8; BALL.playing = true; }
+  // Шаг анимации; при сдвиге шара свет и кадр пересчитываются («горячий» режим, пока он движется).
+  var camTarget = null;
+  function ballStep() {
+    var now = performance.now(), dt = Math.min(0.05, (now - BALL.last) / 1000);
+    BALL.last = now;
+    if (S.ball && BALL.playing && VX.stage === 'ready' && VX.lights > 0) {
+      BALL.t += dt * S.bspeed;
+      if (BALL.t >= BALL.end) { BALL.t = BALL.end; BALL.playing = false; }
+    }
+    var b = ballNow(), key = b ? b.t.toFixed(4) : 'off';
+    if (key !== BALL.key) {
+      var moving = BALL.key !== '' && b && BALL.key !== 'off';
+      BALL.key = key; needReset = true; gatherDirty = true;
+      VX.lightState = 'dirty';
+      if (moving) VX.lastInput = now;
+    }
+    // камера плавно доводит взгляд до шара
+    if (S.bfollow && b) {
+      var base0 = cameraBasis(true), aim = [b.p[0], b.p[1], b.p[2]];
+      if (!camTarget) camTarget = [base0.pos[0] + base0.f[0] * 1.8, base0.pos[1] + base0.f[1] * 1.8, base0.pos[2] + base0.f[2] * 1.8];
+      var k = Math.min(1, dt * 4), mv = 0;
+      for (var i = 0; i < 3; i++) { var d = (aim[i] - camTarget[i]) * k; camTarget[i] += d; mv += Math.abs(d); }
+      if (mv > 1e-5) needReset = true;
+    } else if (camTarget) { camTarget = null; needReset = true; }
+  }
+
+  // Мягкий свет из вокселей для пикселей кадра (по G-буферу последнего прохода).
+  function cacheWanted() { return !voxOn() && (S.prior || S.cacheOnly); }
   function gatherCache() {
     var u = gat.u, b = cameraBasis();
     gl.bindFramebuffer(gl.FRAMEBUFFER, cFbo);
     gl.viewport(0, 0, W, H);
     gl.useProgram(gat.p);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gTex); gl.uniform1i(u.uGb, 0);
-    bindProbes(u);
+    bindSet(plus(VX.ok ? plus(vbase(), { 11: VX.sf[VX.sfCur] }) : {}, { 2: gTex }));
+    voxUniforms(u);
     sceneUniforms(u);
     gl.uniform2f(u.uRes, W, H);
     gl.uniform3fv(u.uCamPos, b.pos); gl.uniform3fv(u.uCamF, b.f); gl.uniform3fv(u.uCamR, b.r); gl.uniform3fv(u.uCamU, b.u);
@@ -1070,7 +1977,7 @@ void main() {
   var C0 = [0, 1.05, 0], P0 = 9 * Math.PI / 180, D0 = 1.8;
   function norm(v) { var l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; }
   function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
-  function cameraBasis() {
+  function cameraBasis(free) {
     var f0 = [0, -Math.sin(P0), -Math.cos(P0)];
     var F = [C0[0] + f0[0] * D0, C0[1] + f0[1] * D0, C0[2] + f0[2] * D0];
     var v = [-f0[0] * D0, -f0[1] * D0, -f0[2] * D0];
@@ -1080,25 +1987,26 @@ void main() {
     var cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch), d = right[0] * v[0] + right[1] * v[1] + right[2] * v[2], cr = cross(right, v);
     v = [v[0] * cp + cr[0] * sp + right[0] * d * (1 - cp), v[1] * cp + cr[1] * sp + right[1] * d * (1 - cp), v[2] * cp + cr[2] * sp + right[2] * d * (1 - cp)];
     var pos = [F[0] + v[0] * cam.k, F[1] + v[1] * cam.k, F[2] + v[2] * cam.k];
-    var fwd = norm([F[0] - pos[0], F[1] - pos[1], F[2] - pos[2]]);
+    var T = (!free && camTarget) ? camTarget : F;
+    var fwd = norm([T[0] - pos[0], T[1] - pos[1], T[2] - pos[2]]);
     var r = norm(cross(fwd, [0, 1, 0]));
     var u = cross(r, fwd);
     return { pos: pos, f: fwd, r: r, u: u };
   }
 
   // ---------- рендер ----------
+  function voxFrame() { return voxOn() || (S.vdbg && VX.ok); }
   function renderPT(n) {
     var dst = 1 - cur, b = cameraBasis();
-    var u = pt.u;
+    var vm = voxFrame(), P = vm ? ptv : pt, u = P.u;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo[dst]);
     gl.viewport(0, 0, W, H);
-    gl.useProgram(pt.p);
+    gl.useProgram(P.p);
+    bindSet(VX.ok ? plus(vbase(), { 8: VX.sd, 11: VX.sf[VX.sfCur] }) : {});
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex[cur]);
-    gl.uniform1i(u.uPrev, 0);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, dTex[cur]);
-    gl.uniform1i(u.uPrevD, 1);
     gl.uniform2f(u.uRes, W, H);
-    var c0 = needReset ? 0 : count, nd = c0 < 1 ? 4 : (c0 < 4 ? 2 : 1);
+    var c0 = needReset ? 0 : count, nd = vm ? 4 : (c0 < 1 ? 4 : (c0 < 4 ? 2 : 1));
     if (needReset) dirBase = 0;
     gl.uniform1i(u.uDirN, nd); gl.uniform1f(u.uDirBase, dirBase);
     dirBase += n * nd;
@@ -1108,9 +2016,11 @@ void main() {
     gl.uniform3fv(u.uCamPos, b.pos); gl.uniform3fv(u.uCamF, b.f); gl.uniform3fv(u.uCamR, b.r); gl.uniform3fv(u.uCamU, b.u);
     gl.uniform1f(u.uTanV, 0.649); gl.uniform1f(u.uAspect, ASPECT);
     sceneUniforms(u);
-    gl.uniform1i(u.uFG, S.fg && probe.n > 0 ? 1 : 0);
-    bindProbes(u);
-    gl.uniform1i(u.uDebug, window.__debug ? 1 : 0); gl.uniform1f(u.uAA, S.aa ? 1 : 0);
+    voxUniforms(u);
+    gl.uniform1f(u.uAO, S.vao);
+    gl.uniform1i(u.uVoxDbg, S.vdbg && VX.ok ? 1 : 0);
+    gl.uniform1i(u.uFG, !voxOn() && S.fg && VX.ok ? 1 : 0);
+    gl.uniform1f(u.uAA, S.aa ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     count = needReset ? n : count + n;
     needReset = false; cur = dst;
@@ -1144,9 +2054,9 @@ void main() {
     gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tex[cur]);
     gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, dTex[cur]);
     gl.uniform1i(disp.u.uTex, 0); gl.uniform1i(disp.u.uAlb, 1); gl.uniform1i(disp.u.uTot, 2); gl.uniform1i(disp.u.uDir, 3);
-    gl.uniform1f(disp.u.uPriorOn, S.prior ? 1 : 0); gl.uniform1f(disp.u.uK, S.priorK);
+    gl.uniform1f(disp.u.uK, S.priorK);
     gl.uniform1f(disp.u.uPriorAmt, S.priorAmt);
-    var useCache = cacheWanted() && probe.n > 0;
+    var useCache = !voxFrame() && VX.ok;
     gl.uniform1f(disp.u.uPriorOn, S.prior && useCache ? 1 : 0);
     gl.uniform1f(disp.u.uCacheOnly, S.cacheOnly && useCache ? 1 : 0);
     gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_2D, cTex); gl.uniform1i(disp.u.uCache, 5);
@@ -1178,28 +2088,39 @@ void main() {
     sunI: function (v) { return Number(v).toFixed(1); }, skyI: function (v) { return Number(v).toFixed(1); },
     sunAz: function (v) { return v + '°'; }, sunEl: function (v) { return v + '°'; },
     exposure: function (v) { return '×' + Number(v).toFixed(2); },
-    rows: function (v) { return v + ' строк'; }, levels: function (v) { return String(v); }, target: function (v) { return String(v); }, priorK: function (v) { return String(v); }, priorAmt: function (v) { return '×' + Number(v).toFixed(2); }, dnPhi: function (v) { return Number(v).toFixed(1); }
+    rows: function (v) { return v + ' строк'; }, levels: function (v) { return String(v); }, target: function (v) { return String(v); }, priorK: function (v) { return String(v); }, priorAmt: function (v) { return '×' + Number(v).toFixed(2); }, dnPhi: function (v) { return Number(v).toFixed(1); },
+    vres: function (v) { return v + ' (' + (350 / v).toFixed(1).replace('.', ',') + ' см)'; }, vrays: function (v) { return String(v); },
+    vao: function (v) { return Number(v).toFixed(2); }, vspp: function (v) { return String(v); },
+    bspeed: function (v) { return '×' + Number(v).toFixed(2); }
   };
+  var LIGHT = { bounces: 1, sunI: 1, skyI: 1, sunAz: 1, sunEl: 1 };
+  var NO_RESET = { levels: 1, exposure: 1, full: 1, target: 1, vspp: 1, dn: 1, dnPhi: 1, fpsFull: 1, unlock: 1, sway: 1, prior: 1, priorK: 1, priorAmt: 1, cacheOnly: 1, vref: 1, vfilt: 1, bspeed: 1 };
   Array.prototype.forEach.call(document.querySelectorAll('[data-k]'), function (el) {
     var k = el.getAttribute('data-k');
     var out = document.getElementById('o_' + k);
-    function apply() {
+    function apply(ev) {
       var v = el.type === 'checkbox' ? el.checked : parseFloat(el.value);
-      var rowsChanged = k === 'rows' && v !== S.rows;
+      if (out) out.textContent = fmt[k](v);
+      // сетка и число лучей перестраивают вокселизацию: только когда ползунок отпустили
+      if (k === 'vres' || k === 'vrays') { if (ev.type === 'change' && v !== S[k]) { S[k] = v; voxStart(); } return; }
+      if (v === S[k]) return;
+      var rowsChanged = k === 'rows';
       S[k] = v;
       if (k === 'fpsFull') { msAvg = 0; lastRec = 0; recent = []; }
-      if (out) out.textContent = fmt[k](v);
-      if (k === 'prior' || k === 'cacheOnly') gatherDirty = true;
-      if (k === 'levels' || k === 'exposure' || k === 'full' || k === 'target' || k === 'dn' || k === 'dnPhi' || k === 'fpsFull' || k === 'unlock' || k === 'sway' || k === 'prior' || k === 'priorK' || k === 'priorAmt' || k === 'cacheOnly') return;
-      // свет и геометрия меняют сам кэш; камера, разрешение и сглаживание его не трогают
-      if (k === 'bounces' || k === 'sunI' || k === 'skyI' || k === 'sunAz' || k === 'sunEl' || k === 'facets' || k === 'fg') probe.reset = true;
+      if (LIGHT[k]) { VX.lightState = 'dirty'; VX.lastInput = performance.now(); }
+      if (k === 'vox' || k === 'fg' || k === 'vfilt') VX.lightState = 'dirty';
+      if (k === 'prior' || k === 'cacheOnly' || k === 'vox') gatherDirty = true;
+      if (NO_RESET[k]) return;
       if (rowsChanged) allocTargets(); else needReset = true;
     }
     el.addEventListener('input', apply);
+    el.addEventListener('change', apply);
     if (out) out.textContent = fmt[k](el.type === 'checkbox' ? el.checked : parseFloat(el.value));
   });
   document.getElementById('resetCam').addEventListener('click', function () { cam.yaw = 0; cam.pitch = 0; cam.k = 1; needReset = true; });
-  document.getElementById('resetAcc').addEventListener('click', function () { needReset = true; probe.reset = true; });
+  document.getElementById('resetAcc').addEventListener('click', function () { needReset = true; VX.lightState = 'dirty'; });
+  document.getElementById('rebuild').addEventListener('click', function () { voxStart(); });
+  document.getElementById('ballGo').addEventListener('click', function () { ballRestart(); });
 
   var drag = null;
   canvas.style.touchAction = 'none';
@@ -1220,7 +2141,7 @@ void main() {
   }, { passive: false });
 
   // ---------- цикл ----------
-  var last = performance.now(), fpsAvg = 30, tick = 0, hSpp = document.getElementById('hSpp'), hFps = document.getElementById('hFps'), hFpsL = document.getElementById('hFpsL'), hFpsWrap = document.getElementById('hFpsWrap'), hProbe = document.getElementById('hProbe');
+  var last = performance.now(), fpsAvg = 30, tick = 0, hSpp = document.getElementById('hSpp'), hFps = document.getElementById('hFps'), hFpsL = document.getElementById('hFpsL'), hFpsWrap = document.getElementById('hFpsWrap'), hProbe = document.getElementById('hProbe'), timEl = document.getElementById('tim');
   var burstQ = [], polling = false, lastDone = 0, mc = new MessageChannel();
   var recCount = 0, trackedN = 0;
   var recent = [], warm = false;
@@ -1255,40 +2176,64 @@ void main() {
     if (!polling) { polling = true; mc.port2.postMessage(0); }
   }
   function fmtFps(v) { return v < 10 ? v.toFixed(1) : String(Math.round(v)); }
-  window.__gi = { get count() { return count; }, get ms() { return msAvg; }, get q() { return burstQ.length; }, get recs() { return recCount; }, get tracked() { return trackedN; }, get tick() { return tick; }, dump: function () { gl.bindFramebuffer(gl.FRAMEBUFFER, fbo[cur]); var out = { W: W, H: H }; [[0, 'tot'], [1, 'g'], [2, 'alb'], [3, 'dir']].forEach(function (a) { gl.readBuffer(gl.COLOR_ATTACHMENT0 + a[0]); var buf = new Float32Array(W * H * 4); gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, buf); out[a[1]] = Array.from(buf); out['err_' + a[1]] = gl.getError(); });
- out.f32 = (intFmt === gl.RGBA32F); out.readType = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_TYPE); out.readFmt = gl.getParameter(gl.IMPLEMENTATION_COLOR_READ_FORMAT); gl.bindFramebuffer(gl.FRAMEBUFFER, null); return out; }, S: S, probe: probe, setSpp: function (n) { spp = n; }, snap: function () { display(); return canvas.toDataURL('image/png'); } };
+  function fms(v) { return v == null ? '—' : (v < 10 ? v.toFixed(2) : v.toFixed(1)) + ' мс'; }
+  function timingText() {
+    var L = [];
+    if (VX.stage === 'ready') {
+      L.push('воксели ' + VX.nx + '×' + VX.ny + '×' + VX.nz + ': ' + VX.nvox + ' занято, ' + VX.nf + ' граней × ' + VX.rays + ' лучей');
+      L.push('построение ' + (VX.buildMs / 1000).toFixed(2).replace('.', ',') + ' с, кэш видимости ' + (VX.visW * VX.visH * 8 / 1048576).toFixed(1).replace('.', ',') + ' МБ');
+    } else if (VX.stage === 'failed') L.push('воксельный GI отключён: не создался буфер ' + VX.err);
+    else L.push('воксели: ' + voxStatus());
+    L.push('видеокарта: ' + GPU + ', буферы ' + (intFmt === gl.RGBA32F ? 'RGBA32F' : 'RGBA16F'));
+    if (tq) {
+      L.push('свет на гранях ' + fms(tAvg.direct) + ' · отскоки ×' + VX.k + ' ' + fms(tAvg.bounce) + ' · фильтр ' + fms(tAvg.filter));
+      if (ballNow()) L.push('свет шара ' + fms(tAvg.ball) + ' (64 направления × 96 лучей)');
+      L.push('кадр ' + fms(tAvg.frame) + (S.vref && VX.k > 0 ? ' · досчёт ' + fms(tAvg.refine) : ''));
+    }
+    return L.join('\n');
+  }
+  window.__gi = { get count() { return count; }, get ms() { return msAvg; }, get q() { return burstQ.length; }, get recs() { return recCount; }, get tracked() { return trackedN; }, get tick() { return tick; }, get vx() { return VX; }, get t() { return tAvg; }, timing: timingText, S: S, ballT: function (t) { BALL.t = t; BALL.playing = false; var b = ballNow(); if (b && S.bfollow) camTarget = b.p.slice(); }, setSpp: function (n) { spp = n; }, snap: function () { display(); return canvas.toDataURL('image/png'); } };
   var mcLoop = new MessageChannel();
   mcLoop.port1.onmessage = function () { loop(performance.now()); };
   function waitGpu() { setTimeout(function () { loop(performance.now()); }, 0); }
   function loop(now) {
+    if (lost) return;
     if (window.__pause) { requestAnimationFrame(loop); return; }
     // без лимита: не копим очередь, ждём, пока видеокарта закончит один из двух последних кадров
     if (S.unlock && burstQ.length >= 2) { waitGpu(); return; }
     var dt = now - last; last = now;
     if (dt > 0 && dt < 1000) fpsAvg = fpsAvg * 0.9 + (1000 / dt) * 0.1;
     tick++;
+    gpuPoll();
+    ballStep();
+    var inter = interacting > 0 || !!drag || BALL.playing && VX.stage === 'ready';
+    if (interacting > 0) interacting--;
     if (S.sway) { cam.yaw = 0.3 * Math.sin(now / 650); cam.pitch = 0.08 * Math.sin(now / 910); needReset = true; }
     var work = false, burst = false, tb = performance.now();
-    var probesChanged = updateProbes();
-    if (S.full && (needReset || count < S.target)) {
+    var voxWork = voxStep(!inter && !S.sway);
+    var tgt = voxFrame() ? S.vspp : S.target;
+    if (S.full && (needReset || count < tgt)) {
       work = burst = true;
-      do { renderPT(4); } while (count < S.target);
+      gpuBegin('frame');
+      do { renderPT(4); } while (count < tgt);
+      gpuEnd();
     } else if (needReset || count < maxSamples) {
       work = true;
-      renderPT(interacting > 0 ? 1 : spp);
-      if (interacting > 0) interacting--;
+      renderPT(inter ? 1 : spp);
       if (tick % 8 === 0 && !window.__fixedSpp) {
         if (dt > 48 && spp > 1) spp--;
         else if (dt < 20 && spp < 6) spp++;
       }
     }
-    if (cacheWanted() && (work || probesChanged || gatherDirty)) { gatherCache(); gatherDirty = false; }
-    work = work || probesChanged;
+    if (cacheWanted() && VX.ok && (work || voxWork || gatherDirty)) { gatherCache(); gatherDirty = false; }
+    work = work || voxWork;
     display();
-    if (work && (S.unlock || (burst && S.fpsFull))) trackBurst(tb, burst && S.fpsFull);
+    // кадры, перезапущенные досчётом лучей, в счётчик не идут: в их времени есть и досчёт
+    var isFps = burst && S.fpsFull && voxWork !== 'refine';
+    if (work && (S.unlock || isFps)) trackBurst(tb, isFps);
     if (tick % 6 === 0) {
       hSpp.textContent = count;
-      hProbe.textContent = cacheWanted() ? (probe.n >= PROBE_MAX ? probe.n + ' ✓' : probe.n) : 'выкл';
+      hProbe.textContent = voxStatus();
       if (S.fpsFull) {
         if (!S.full) { hFps.textContent = '—'; hFpsL.textContent = 'включите «Полный кадр сразу»'; hFpsWrap.style.opacity = '1'; }
         else if (msAvg > 0) {
@@ -1300,10 +2245,32 @@ void main() {
         hFps.textContent = Math.round(fpsAvg); hFpsL.textContent = 'кадр/с'; hFpsWrap.style.opacity = '1';
       }
     }
+    if (tick % 15 === 0) timEl.textContent = timingText();
     if (S.unlock && work) mcLoop.port2.postMessage(0); else requestAnimationFrame(loop);
   }
-  fit(); allocTargets(); fit();
-  requestAnimationFrame(loop);
+  function boot() {
+    if (lost) return;
+    if (!pending.every(linked)) {
+      hProbe.textContent = 'шейдеры ' + ((performance.now() - compileT0) / 1000).toFixed(0) + ' с';
+      setTimeout(boot, 50);
+      return;
+    }
+    try {
+      var got = pending.map(finishProgram);
+      pt = got[0]; ptv = got[1]; disp = got[2]; dn = got[3]; gat = got[4];
+      vA = got[5]; vB = got[6]; vV = got[7]; vD = got[8]; vN = got[9]; vF = got[10]; vR = got[11]; vP = got[12];
+    } catch (e) { fail('Ошибка шейдера: ' + e.message); window.__glError = e.message; return; }
+    window.__gi.compileMs = performance.now() - compileT0;
+    gl.bindVertexArray(gl.createVertexArray());
+    [pt, ptv, gat, vA, vB, vV, vD, vN, vF, vR, vP].forEach(function (pg) { gl.useProgram(pg.p); if (pg.u['VRT[0]']) gl.uniform1fv(pg.u['VRT[0]'], new Float32Array(VRTd)); });
+    fit();
+    if (!allocTargets()) return;
+    fit();
+    voxStart();
+    ballInit();
+    requestAnimationFrame(loop);
+  }
+  boot();
 })();
 </script>
 
